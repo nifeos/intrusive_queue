@@ -94,7 +94,7 @@ rules. The queue's next use of that token is then undefined behavior. Miri repor
 Stacked Borrows and Tree Borrows. The test
 `a_token_from_the_owning_pointer_survives_later_borrows` runs the safe shape.
 
-A dropped token strands its node, and so does a dropped queue that still holds nodes: queueing
+A dropped token strands its node, and so does a dropped queue that still holds nodes: queuing
 one again needs a fresh mint. `Queue` has no `Drop`, so a caller can move a queue by value through
 `Default` and `core::mem::take`.
 

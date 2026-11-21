@@ -69,7 +69,7 @@ pub unsafe trait Node: Sized {
 pub struct Unqueued<T>(NonNull<T>);
 
 impl<T> Unqueued<T> {
-    /// Mint the token for `node`. The one `unsafe` step in queueing.
+    /// Mint the token for `node`. The one `unsafe` step in queuing.
     ///
     /// # Safety
     ///
@@ -134,7 +134,7 @@ impl<T> core::fmt::Debug for Unqueued<T> {
 /// First in, first out: the queue is two pointers into nodes it does not own, plus a count.
 ///
 /// Dropping a queue that still holds nodes strands them as dropping a token does: they stay linked,
-/// no token for them exists, and queueing one again needs a fresh [`Unqueued::new`]. `Queue` has no
+/// no token for them exists, and queuing one again needs a fresh [`Unqueued::new`]. `Queue` has no
 /// `Drop`, so pop every node before the queue goes.
 ///
 /// # Examples
@@ -521,7 +521,7 @@ mod tests {
         assert!(q.pop_front().is_none());
 
         q.push_back(token(&mut b));
-        q.push_back(ta); // the token the pop handed back is what makes queueing `a` again legal
+        q.push_back(ta); // the token the pop handed back is what makes queuing `a` again legal
         assert_eq!(q.pop_front().map(|t| tag(&t)), Some(2));
         assert_eq!(q.pop_front().map(|t| tag(&t)), Some(1));
         assert!(q.is_empty());

@@ -174,6 +174,8 @@ impl<T> core::fmt::Debug for Unqueued<T> {
 pub struct Queue<T: Node> {
     head: Option<NonNull<T>>,
     tail: Option<NonNull<T>>,
+    /// How many nodes the queue holds (`len`, the standard library's `LinkedList::len`).
+    #[doc(alias = "length")]
     len: usize,
 }
 

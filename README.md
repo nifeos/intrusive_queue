@@ -111,9 +111,9 @@ cargo build --lib --target aarch64-unknown-none-softfloat
 cargo build --lib --target riscv64imac-unknown-none-elf
 ```
 
-The crate has no features, so a plain `cargo test` runs every unit test and doctest. Two doctests
-are `compile_fail`: a double push (`E0382`) and a queue of `Rc` nodes sent to another thread
-(`E0277`).
+The crate has no features, so a plain `cargo test` runs every unit test and doctest. The
+`compile_fail` doctests cover a double push (`E0382`) and a queue of `Rc` nodes sent to another
+thread (`E0277`).
 
 ### Running the proofs
 

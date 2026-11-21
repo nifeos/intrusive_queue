@@ -1,4 +1,4 @@
-//! An intrusive first in, first out (FIFO) queue: the link lives inside the node, so push and pop cannot allocate or
+//! An intrusive first in, first out queue: the link lives inside the node, so push and pop cannot allocate or
 //! fail, and a pop hands back the node itself. Nothing here checks rule 2 below; the README holds
 //! the contract's fine print, the examples and what the proofs cover.
 //!
@@ -69,7 +69,7 @@ pub unsafe trait Node: Sized {
 pub struct Unqueued<T>(NonNull<T>);
 
 impl<T> Unqueued<T> {
-    /// Mint the token for `node`. The one `unsafe` step in queueing.
+    /// Mint the token for `node`. The one `unsafe` step in queuing.
     ///
     /// # Safety
     ///
@@ -134,7 +134,7 @@ impl<T> core::fmt::Debug for Unqueued<T> {
 /// First in, first out: the queue is two pointers into nodes it does not own, plus a count.
 ///
 /// Dropping a queue that still holds nodes strands them as dropping a token does: they stay linked,
-/// no token for them exists, and queueing one again needs a fresh [`Unqueued::new`]. `Queue` has no
+/// no token for them exists, and queuing one again needs a fresh [`Unqueued::new`]. `Queue` has no
 /// `Drop`, so pop every node before the queue goes.
 ///
 /// # Examples
@@ -174,6 +174,8 @@ impl<T> core::fmt::Debug for Unqueued<T> {
 pub struct Queue<T: Node> {
     head: Option<NonNull<T>>,
     tail: Option<NonNull<T>>,
+    /// How many nodes the queue holds (`len`, the standard library's `LinkedList::len`).
+    #[doc(alias = "length")]
     len: usize,
 }
 
@@ -321,7 +323,7 @@ mod verification {
     }
 
     /// Falsification: replayable `falsifications/verification.any_push_pop_interleaving_is_first_in_first_out_and_lossless.patch`
-    /// FIFO order, no loss, no invention, across every operation sequence. Six symbolic
+    /// First in, first out order, no loss, no invention, across every operation sequence. Six symbolic
     /// steps over three nodes: each step pushes some not-currently-queued node or pops. The
     /// model records the order tags went in; the queue must hand them back in exactly that
     /// order, agree about emptiness and length at every step, and never dereference a stale
@@ -388,8 +390,8 @@ mod verification {
 
     /// Falsification: replayable `falsifications/verification.a_popped_node_leaves_with_a_clear_link.patch`
     /// A popped node leaves with a clear link, whichever node it was and however many were
-    /// queued behind it: the queue's order stays right without that write, so the FIFO harness
-    /// cannot see it go.
+    /// queued behind it: the queue's order stays right without that write, so the first in, first out
+    /// harness cannot see it go.
     #[kani::proof]
     #[kani::unwind(4)]
     fn a_popped_node_leaves_with_a_clear_link() {
@@ -519,7 +521,7 @@ mod tests {
         assert!(q.pop_front().is_none());
 
         q.push_back(token(&mut b));
-        q.push_back(ta); // the token the pop handed back is what makes queueing `a` again legal
+        q.push_back(ta); // the token the pop handed back is what makes queuing `a` again legal
         assert_eq!(q.pop_front().map(|t| tag(&t)), Some(2));
         assert_eq!(q.pop_front().map(|t| tag(&t)), Some(1));
         assert!(q.is_empty());

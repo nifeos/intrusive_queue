@@ -5,7 +5,7 @@
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/nifeos/intrusive_queue#license)
 [![minimum Rust version](https://img.shields.io/badge/rust-1.85%2B-blue.svg)](https://github.com/nifeos/intrusive_queue/blob/main/Cargo.toml)
 
-An intrusive first in, first out (FIFO) queue. The link lives inside the node, so a push and a pop
+An intrusive first in, first out queue. The link lives inside the node, so a push and a pop
 cannot allocate or fail, and a pop hands back the node itself. The queue is two pointers and a
 count, and it owns none of its nodes. That makes a push legal where allocation is not, such as an
 interrupt handler or a scheduler's run queue.
@@ -94,7 +94,7 @@ rules. The queue's next use of that token is then undefined behavior. Miri repor
 Stacked Borrows and Tree Borrows. The test
 `a_token_from_the_owning_pointer_survives_later_borrows` runs the safe shape.
 
-A dropped token strands its node, and so does a dropped queue that still holds nodes: queueing
+A dropped token strands its node, and so does a dropped queue that still holds nodes: queuing
 one again needs a fresh mint. `Queue` has no `Drop`, so a caller can move a queue by value through
 `Default` and `core::mem::take`.
 
@@ -111,9 +111,9 @@ cargo build --lib --target aarch64-unknown-none-softfloat
 cargo build --lib --target riscv64imac-unknown-none-elf
 ```
 
-The crate has no features, so a plain `cargo test` runs every unit test and doctest. Two doctests
-are `compile_fail`: a double push (`E0382`) and a queue of `Rc` nodes sent to another thread
-(`E0277`).
+The crate has no features, so a plain `cargo test` runs every unit test and doctest. The
+`compile_fail` doctests cover a double push (`E0382`) and a queue of `Rc` nodes sent to another
+thread (`E0277`).
 
 ### Running the proofs
 
@@ -149,9 +149,10 @@ cargo kani --harness verification::a_popped_node_leaves_with_a_clear_link --exac
 patch -R -p1 --no-backup-if-mismatch < falsifications/verification.a_popped_node_leaves_with_a_clear_link.patch
 ```
 
-The failing run prints `Failed Checks: assertion failed: unsafe { (*token.as_ptr()).next()
-}.is_none()` and `VERIFICATION:- FAILED`. It ends with `Complete - 0 successfully verified
-harnesses, 1 failures, 1 total.`, and `cargo kani` exits 1. Each patch's opening lines name the
+The failing run prints
+`Failed Checks: assertion failed: unsafe { (*token.as_ptr()).next() }.is_none()` and
+`VERIFICATION:- FAILED`. It ends with
+`Complete - 0 successfully verified harnesses, 1 failures, 1 total.`, and `cargo kani` exits 1. Each patch's opening lines name the
 check it expects to fail.
 
 ## BUGS

@@ -5,7 +5,7 @@
 [![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/nifeos/intrusive_queue#license)
 [![minimum Rust version](https://img.shields.io/badge/rust-1.85%2B-blue.svg)](https://github.com/nifeos/intrusive_queue/blob/main/Cargo.toml)
 
-An intrusive first in, first out (FIFO) queue. The link lives inside the node, so a push and a pop
+An intrusive first in, first out queue. The link lives inside the node, so a push and a pop
 cannot allocate or fail, and a pop hands back the node itself. The queue is two pointers and a
 count, and it owns none of its nodes. That makes a push legal where allocation is not, such as an
 interrupt handler or a scheduler's run queue.
@@ -149,9 +149,10 @@ cargo kani --harness verification::a_popped_node_leaves_with_a_clear_link --exac
 patch -R -p1 --no-backup-if-mismatch < falsifications/verification.a_popped_node_leaves_with_a_clear_link.patch
 ```
 
-The failing run prints `Failed Checks: assertion failed: unsafe { (*token.as_ptr()).next()
-}.is_none()` and `VERIFICATION:- FAILED`. It ends with `Complete - 0 successfully verified
-harnesses, 1 failures, 1 total.`, and `cargo kani` exits 1. Each patch's opening lines name the
+The failing run prints
+`Failed Checks: assertion failed: unsafe { (*token.as_ptr()).next() }.is_none()` and
+`VERIFICATION:- FAILED`. It ends with
+`Complete - 0 successfully verified harnesses, 1 failures, 1 total.`, and `cargo kani` exits 1. Each patch's opening lines name the
 check it expects to fail.
 
 ## BUGS

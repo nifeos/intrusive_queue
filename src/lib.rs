@@ -1,4 +1,4 @@
-//! An intrusive first in, first out (FIFO) queue: the link lives inside the node, so push and pop cannot allocate or
+//! An intrusive first in, first out queue: the link lives inside the node, so push and pop cannot allocate or
 //! fail, and a pop hands back the node itself. Nothing here checks rule 2 below; the README holds
 //! the contract's fine print, the examples and what the proofs cover.
 //!
@@ -321,7 +321,7 @@ mod verification {
     }
 
     /// Falsification: replayable `falsifications/verification.any_push_pop_interleaving_is_first_in_first_out_and_lossless.patch`
-    /// FIFO order, no loss, no invention, across every operation sequence. Six symbolic
+    /// First in, first out order, no loss, no invention, across every operation sequence. Six symbolic
     /// steps over three nodes: each step pushes some not-currently-queued node or pops. The
     /// model records the order tags went in; the queue must hand them back in exactly that
     /// order, agree about emptiness and length at every step, and never dereference a stale
@@ -388,8 +388,8 @@ mod verification {
 
     /// Falsification: replayable `falsifications/verification.a_popped_node_leaves_with_a_clear_link.patch`
     /// A popped node leaves with a clear link, whichever node it was and however many were
-    /// queued behind it: the queue's order stays right without that write, so the FIFO harness
-    /// cannot see it go.
+    /// queued behind it: the queue's order stays right without that write, so the first in, first out
+    /// harness cannot see it go.
     #[kani::proof]
     #[kani::unwind(4)]
     fn a_popped_node_leaves_with_a_clear_link() {

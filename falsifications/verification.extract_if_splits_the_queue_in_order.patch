@@ -1,0 +1,29 @@
+Falsifies `intrusive_queue::verification::extract_if_splits_the_queue_in_order`.
+
+The defect: the walk reads the next link after it handles a node, not before. That reads as the
+natural loop order, and it is right for every node the filter passes over. A node the filter picks
+has already left by then, and leaving cleared its link, so the walk stops at the first pick and
+never shows the filter the nodes behind it.
+
+Expected to fail: the harness's `assert_eq!(seen, count, "the filter missed a node")`, whenever
+the filter picks a node that has another node behind it.
+
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -379,7 +379,6 @@ impl<T: Node> Queue<T> {
+         while let Some(node) = cursor {
+             // SAFETY: as in `remove`. The link is read before `node` can leave, because leaving
+             // clears it.
+-            cursor = unsafe { (*node.as_ptr()).next() };
+             if filter(node) {
+                 // SAFETY: `node` is on this queue, and `previous` is the last node the walk kept,
+                 // which is the node just before it.
+@@ -387,6 +386,7 @@ impl<T: Node> Queue<T> {
+             } else {
+                 previous = Some(node);
+             }
++            cursor = unsafe { (*node.as_ptr()).next() };
+         }
+         extracted
+     }

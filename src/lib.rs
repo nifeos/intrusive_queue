@@ -279,6 +279,142 @@ impl<T: Node> Queue<T> {
         self.len = self.len.wrapping_sub(1);
         Some(Unqueued(node))
     }
+
+    /// Take `victim` out of the queue wherever it stands, with its token, or `None` if the queue
+    /// does not hold it. The nodes around it keep their order.
+    ///
+    /// O(n) from the head: the walk reads each node's link until it meets `victim`, then writes
+    /// the one link that bridges the gap. `victim` is only compared, never read, unless the queue
+    /// holds it, so any pointer is safe to pass.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use core::ptr::NonNull;
+    /// # use intrusive_queue::{Queue, Node, Unqueued};
+    /// # struct Thread { next: Option<NonNull<Thread>> }
+    /// # // SAFETY: plain field storage, which is the whole of the `Node` contract.
+    /// # unsafe impl Node for Thread {
+    /// #     fn next(&self) -> Option<NonNull<Self>> { self.next }
+    /// #     fn set_next(&mut self, next: Option<NonNull<Self>>) { self.next = next; }
+    /// # }
+    /// let [a, b, c] = [(); 3].map(|()| NonNull::new(Box::into_raw(Box::new(Thread { next: None }))).unwrap());
+    /// let mut waiting: Queue<Thread> = Queue::new();
+    /// // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
+    /// unsafe { [a, b, c].map(|t| waiting.push_back(Unqueued::new(t))) };
+    ///
+    /// // A thread whose wait ends early leaves from the middle.
+    /// assert!(waiting.remove(b).is_some_and(|token| token == b));
+    /// assert!(waiting.remove(b).is_none());
+    /// assert!(waiting.pop_front().is_some_and(|token| token == a));
+    /// assert!(waiting.pop_front().is_some_and(|token| token == c));
+    /// // SAFETY: all three came from `Box::into_raw`, and the queue is empty.
+    /// unsafe { [a, b, c].map(|t| drop(Box::from_raw(t.as_ptr()))) };
+    /// ```
+    pub fn remove(&mut self, victim: NonNull<T>) -> Option<Unqueued<T>> {
+        let mut previous = None;
+        let mut cursor = self.head;
+        while let Some(node) = cursor {
+            if node == victim {
+                // SAFETY: `node` is on this queue, reached from the head, and `previous` is the
+                // node the walk passed just before it.
+                return Some(unsafe { self.unlink(previous, node) });
+            }
+            previous = Some(node);
+            // SAFETY: every node between head and tail was pushed with a token and is still valid
+            // (rule 2); we are the only accessor (rule 3).
+            cursor = unsafe { (*node.as_ptr()).next() };
+        }
+        None
+    }
+
+    /// Take every node `filter` picks out of the queue, oldest first, and hand them back as a
+    /// queue of their own. The nodes `filter` passes over stay, in their order.
+    ///
+    /// `filter` sees each node once, in queue order, as a pointer, so it can count (take at most
+    /// three) as well as test. Reading the node through that pointer is the caller's `unsafe`, as
+    /// for any queued node; writing its link breaks the `Node` contract. The method does not
+    /// return early: if `filter` panics, the nodes it has already picked are stranded in the
+    /// queue being built, as a dropped queue strands its nodes, and the rest stay queued.
+    ///
+    /// Unlike `Vec::extract_if`, which returns a lazy iterator holding a borrow of the vector, this
+    /// walks the whole queue at once and returns a `Queue`, so the caller holds no borrow of this
+    /// one while it handles the nodes it took.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use core::ptr::NonNull;
+    /// # use intrusive_queue::{Queue, Node, Unqueued};
+    /// # struct Waiter { key: u32, next: Option<NonNull<Waiter>> }
+    /// # // SAFETY: plain field storage, which is the whole of the `Node` contract.
+    /// # unsafe impl Node for Waiter {
+    /// #     fn next(&self) -> Option<NonNull<Self>> { self.next }
+    /// #     fn set_next(&mut self, next: Option<NonNull<Self>>) { self.next = next; }
+    /// # }
+    /// let waiters = [7, 9, 7, 7].map(|key| NonNull::new(Box::into_raw(Box::new(Waiter { key, next: None }))).unwrap());
+    /// let mut bucket: Queue<Waiter> = Queue::new();
+    /// // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
+    /// unsafe { waiters.map(|w| bucket.push_back(Unqueued::new(w))) };
+    ///
+    /// // Wake at most two of the waiters under key 7, first parked first.
+    /// let mut left = 2;
+    /// // SAFETY: each pointer names one of the live boxed nodes, read between queue operations.
+    /// let mut woken = bucket.extract_if(|w| left > 0 && unsafe { (*w.as_ptr()).key } == 7 && {
+    ///     left -= 1;
+    ///     true
+    /// });
+    /// assert!(woken.pop_front().is_some_and(|t| t == waiters[0]));
+    /// assert!(woken.pop_front().is_some_and(|t| t == waiters[2]));
+    /// assert!(woken.is_empty());
+    /// assert!(bucket.pop_front().is_some_and(|t| t == waiters[1]));
+    /// assert!(bucket.pop_front().is_some_and(|t| t == waiters[3]));
+    /// // SAFETY: all four came from `Box::into_raw`, and both queues are empty.
+    /// unsafe { waiters.map(|w| drop(Box::from_raw(w.as_ptr()))) };
+    /// ```
+    pub fn extract_if(&mut self, mut filter: impl FnMut(NonNull<T>) -> bool) -> Queue<T> {
+        let mut extracted = Queue::new();
+        let mut previous = None;
+        let mut cursor = self.head;
+        while let Some(node) = cursor {
+            // SAFETY: as in `remove`. The link is read before `node` can leave, because leaving
+            // clears it.
+            cursor = unsafe { (*node.as_ptr()).next() };
+            if filter(node) {
+                // SAFETY: `node` is on this queue, and `previous` is the last node the walk kept,
+                // which is the node just before it.
+                extracted.push_back(unsafe { self.unlink(previous, node) });
+            } else {
+                previous = Some(node);
+            }
+        }
+        extracted
+    }
+
+    /// Unlink `node` and hand back its token, with its link cleared as a pop clears it.
+    ///
+    /// # Safety
+    ///
+    /// `node` is on this queue, and `previous` is the node just before it, or `None` when `node`
+    /// is the head.
+    unsafe fn unlink(&mut self, previous: Option<NonNull<T>>, node: NonNull<T>) -> Unqueued<T> {
+        // SAFETY: both are on this queue (the caller's promise), so both are valid (rule 2), and
+        // we are the only accessor (rule 3).
+        unsafe {
+            let next = (*node.as_ptr()).next();
+            match previous {
+                Some(previous) => (*previous.as_ptr()).set_next(next),
+                None => self.head = next,
+            }
+            if next.is_none() {
+                self.tail = previous;
+            }
+            (*node.as_ptr()).set_next(None);
+        }
+        // Wrapping: `node` was on the queue, so `len >= 1`, as in `pop_front`.
+        self.len = self.len.wrapping_sub(1);
+        Unqueued(node)
+    }
 }
 
 impl<T: Node> core::fmt::Debug for Queue<T> {
@@ -420,6 +556,104 @@ mod verification {
         let token = q.pop_front().expect("lost a node");
         // SAFETY: pop returns only nodes we pushed, all still valid.
         assert!(unsafe { (*token.as_ptr()).next() }.is_none());
+    }
+
+    /// Four nodes for the removal harnesses, the last never queued before the call under proof.
+    fn four_nodes() -> [N; 4] {
+        [0, 1, 2, 3].map(|tag| N { next: None, tag })
+    }
+
+    /// Falsification: replayable `falsifications/verification.removing_any_node_keeps_the_rest_in_order.patch`
+    /// Removing any node, or one the queue does not hold, from a queue of up to three takes out
+    /// exactly that node with a clear link, keeps the rest in order, and leaves the tail right: a
+    /// node pushed after the removal comes out last.
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn removing_any_node_keeps_the_rest_in_order() {
+        let mut nodes = four_nodes();
+        let base = (&raw mut nodes).cast::<N>();
+        let mut q: Queue<N> = Queue::new();
+        let count: usize = kani::any();
+        kani::assume(count <= 3);
+        for i in 0..count {
+            // SAFETY: a distinct live element of a local declared before `q`, on no queue, minted
+            // once from the array's own pointer, and the harness is the only accessor.
+            q.push_back(unsafe { Unqueued::new(NonNull::new_unchecked(base.add(i))) });
+        }
+        let victim: usize = kani::any();
+        kani::assume(victim <= 3);
+        // SAFETY: an element of the array, which outlives the call.
+        let removed = q.remove(unsafe { NonNull::new_unchecked(base.add(victim)) });
+        let was_queued = victim < count;
+        assert_eq!(removed.is_some(), was_queued);
+        if let Some(token) = &removed {
+            // SAFETY: a node of the array, just taken off the queue.
+            assert!(token.as_ptr() == unsafe { base.add(victim) });
+            // SAFETY: as above.
+            assert!(unsafe { (*token.as_ptr()).next() }.is_none());
+        }
+        assert_eq!(q.len(), count - usize::from(was_queued));
+        // SAFETY: node 3 was never pushed and has no token yet.
+        q.push_back(unsafe { Unqueued::new(NonNull::new_unchecked(base.add(3))) });
+        for expect in (0..count).filter(|&i| i != victim).chain([3]) {
+            let token = q.pop_front().expect("lost a node");
+            // SAFETY: pop returns only nodes we pushed, all still valid.
+            assert_eq!(unsafe { (*token.as_ptr()).tag }, expect);
+        }
+        assert!(q.is_empty());
+    }
+
+    /// Falsification: replayable `falsifications/verification.extract_if_splits_the_queue_in_order.patch`
+    /// `extract_if` with a filter that picks any subset of up to three nodes shows the filter each
+    /// node once in queue order, hands the picked ones back in that order, keeps the rest in
+    /// theirs, and leaves both tails right: a node pushed onto either queue afterwards comes out
+    /// last.
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn extract_if_splits_the_queue_in_order() {
+        let mut nodes = four_nodes();
+        let base = (&raw mut nodes).cast::<N>();
+        let mut q: Queue<N> = Queue::new();
+        let count: usize = kani::any();
+        kani::assume(count <= 3);
+        for i in 0..count {
+            // SAFETY: as in the harness above.
+            q.push_back(unsafe { Unqueued::new(NonNull::new_unchecked(base.add(i))) });
+        }
+        let mut picked = [false; 3];
+        let mut seen = 0;
+        let mut extracted = q.extract_if(|node| {
+            // SAFETY: the queue hands the filter only nodes of the array.
+            let tag = unsafe { (*node.as_ptr()).tag };
+            assert_eq!(tag, seen, "the filter saw a node out of order");
+            seen += 1;
+            picked[tag] = kani::any();
+            picked[tag]
+        });
+        assert_eq!(seen, count, "the filter missed a node");
+        let taken = picked.iter().filter(|&&p| p).count();
+        assert_eq!(extracted.len(), taken);
+        assert_eq!(q.len(), count - taken);
+        let target = if kani::any() { &mut q } else { &mut extracted };
+        // SAFETY: node 3 was never pushed and has no token yet.
+        target.push_back(unsafe { Unqueued::new(NonNull::new_unchecked(base.add(3))) });
+        let mut three_seen = 0;
+        for (queue, keep) in [(&mut extracted, true), (&mut q, false)] {
+            let mut expect = (0..count).filter(|&i| picked[i] == keep);
+            while let Some(token) = queue.pop_front() {
+                // SAFETY: pop returns only nodes we pushed, all still valid.
+                let (tag, next) = unsafe { ((*token.as_ptr()).tag, (*token.as_ptr()).next()) };
+                assert!(next.is_none());
+                if tag != 3 {
+                    assert_eq!(Some(tag), expect.next(), "a node out of order or invented");
+                } else {
+                    three_seen += 1;
+                    assert!(queue.is_empty(), "node 3 was not last");
+                }
+            }
+            assert!(expect.next().is_none(), "lost a node");
+        }
+        assert_eq!(three_seen, 1, "lost the node pushed afterwards");
     }
 }
 
@@ -574,6 +808,85 @@ mod tests {
         let p = q.pop_front().unwrap();
         // SAFETY: `p` was just popped, so it is live and unlinked; that it is unlinked is what this test asserts.
         assert!(unsafe { (*p.as_ptr()).next() }.is_none());
+    }
+
+    /// Drain `q` into its nodes' tags, oldest first.
+    fn drain(q: &mut Queue<N>) -> Vec<usize> {
+        core::iter::from_fn(|| q.pop_front())
+            .map(|t| tag(&t))
+            .collect()
+    }
+
+    /// `remove` takes the head, a middle node and the tail, refuses a node the queue does not
+    /// hold, and leaves the tail right after each, so a later push comes out last.
+    #[test]
+    fn remove_takes_any_node_and_keeps_the_tail() {
+        for victim in 0..4 {
+            let mut nodes: Vec<Owned> = (0..5).map(node).collect();
+            let pointers: Vec<NonNull<N>> = nodes.iter().map(|n| n.0).collect();
+            let mut q: Queue<N> = Queue::new();
+            for n in &mut nodes[..3] {
+                q.push_back(token(n));
+            }
+            let removed = q.remove(pointers[victim]);
+            assert_eq!(removed.is_some(), victim < 3);
+            if let Some(t) = &removed {
+                assert!(*t == pointers[victim]);
+                // SAFETY: just taken off the queue, and its node is live.
+                assert!(unsafe { (*t.as_ptr()).next() }.is_none());
+            }
+            assert_eq!(q.len(), if victim < 3 { 2 } else { 3 });
+            q.push_back(token(&mut nodes[4]));
+            let expect: Vec<usize> = (0..3).filter(|&i| i != victim).chain([4]).collect();
+            assert_eq!(drain(&mut q), expect);
+        }
+    }
+
+    /// `remove` on an empty queue finds nothing.
+    #[test]
+    fn remove_from_an_empty_queue_finds_nothing() {
+        let a = node(0);
+        let mut q: Queue<N> = Queue::new();
+        assert!(q.remove(a.0).is_none());
+        assert!(q.is_empty());
+    }
+
+    /// `extract_if` with every subset of three nodes: the filter sees each once in order, the
+    /// picked nodes come back in order with clear links, the rest stay in order, and both tails
+    /// take a later push.
+    #[test]
+    fn extract_if_splits_by_every_subset() {
+        for mask in 0..8usize {
+            let mut nodes: Vec<Owned> = (0..5).map(node).collect();
+            let mut q: Queue<N> = Queue::new();
+            for n in &mut nodes[..3] {
+                q.push_back(token(n));
+            }
+            let mut seen = Vec::new();
+            let mut taken = q.extract_if(|n| {
+                // SAFETY: the filter is handed only the test's live nodes, between operations.
+                let t = unsafe { (*n.as_ptr()).tag };
+                seen.push(t);
+                mask & (1 << t) != 0
+            });
+            assert_eq!(seen, vec![0, 1, 2]);
+            let picked: Vec<usize> = (0..3).filter(|i| mask & (1 << i) != 0).collect();
+            let kept: Vec<usize> = (0..3).filter(|i| mask & (1 << i) == 0).collect();
+            assert_eq!((taken.len(), q.len()), (picked.len(), kept.len()));
+            taken.push_back(token(&mut nodes[3]));
+            q.push_back(token(&mut nodes[4]));
+            let mut popped = Vec::new();
+            while let Some(t) = taken.pop_front() {
+                // SAFETY: popped from the test's own queue, so live.
+                assert!(unsafe { (*t.as_ptr()).next() }.is_none());
+                popped.push(tag(&t));
+            }
+            assert_eq!(popped, picked.into_iter().chain([3]).collect::<Vec<_>>());
+            assert_eq!(
+                drain(&mut q),
+                kept.into_iter().chain([4]).collect::<Vec<_>>()
+            );
+        }
     }
 
     /// **A token minted from the owning pointer survives the owner's later reborrows.** The

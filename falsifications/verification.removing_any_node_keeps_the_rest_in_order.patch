@@ -1,0 +1,24 @@
+Falsifies `intrusive_queue::verification::removing_any_node_keeps_the_rest_in_order`.
+
+The defect: unlinking a node stops moving `tail` back when the node was the last one. The bridge
+write over the gap is right and the order of the nodes left behind is right, so nothing looks
+wrong until the next push, which links the new node behind the node that has already left.
+
+Expected to fail: the harness's check that the node pushed after the removal comes out, whenever
+the removed node was the tail. With one node queued, `head` is `None` after the removal, the push
+takes the `Some` arm on the stale tail, and the queue reports itself empty while the pushed node
+is lost.
+
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -406,9 +406,6 @@ impl<T: Node> Queue<T> {
+                 Some(previous) => (*previous.as_ptr()).set_next(next),
+                 None => self.head = next,
+             }
+-            if next.is_none() {
+-                self.tail = previous;
+-            }
+             (*node.as_ptr()).set_next(None);
+         }
+         // Wrapping: `node` was on the queue, so `len >= 1`, as in `pop_front`.

@@ -75,7 +75,8 @@ aliasing side through the tests, and the repository's weekly workflow runs it.
 
 A node implements `Node`, an `unsafe` trait whose two methods read and store its link. One `unsafe`
 call, `Unqueued::new`, mints a node into an `Unqueued` token. `Queue::push_back` consumes the
-token and `Queue::pop_front` hands it back. The token is neither `Clone` nor `Copy`, so a second
+token and `Queue::pop_front` hands it back. `Queue::iter` walks the queued nodes oldest first and
+yields each as a `NonNull`, which the caller dereferences under the same rules. The token is neither `Clone` nor `Copy`, so a second
 push of the same node does not compile without a second `unsafe` mint.
 
 The caller keeps three rules, and the documentation cites them by number:
@@ -157,8 +158,8 @@ check it expects to fail.
 
 ## BUGS
 
-- The queue is singly linked and offers only `push_back` and `pop_front`. Taking one particular
-  node out means popping every node and pushing the others back.
+- The queue is singly linked and offers only `push_back`, `pop_front` and a read-only walk,
+  `iter`. Taking one particular node out means popping every node and pushing the others back.
 - Nothing in the crate checks rule 2. Freeing a node that a queue still holds causes undefined
   behavior at the queue's next touch of it.
 - The proofs stop at six steps over three nodes.

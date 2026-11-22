@@ -10,7 +10,7 @@ cannot allocate or fail, and a pop hands back the node itself. The queue is two 
 count, and it owns none of its nodes. That makes a push legal where allocation is not, such as an
 interrupt handler or a scheduler's run queue.
 
-The crate is `no_std`, has no dependencies, and is dual licensed `MIT OR Apache-2.0`. Two Kani
+The crate is `no_std`, has no dependencies, and is dual licensed `MIT OR Apache-2.0`. Four Kani
 harnesses prove its list logic, and each carries a falsification patch that shows what turns it
 red.
 
@@ -59,13 +59,18 @@ unsafe { drop((Box::from_raw(a.as_ptr()), Box::from_raw(b.as_ptr()))) };
 
 ## What is proven
 
-Two Kani harnesses in `src/lib.rs` drive the real `Queue` against a model of an array and two
+Four Kani harnesses in `src/lib.rs` drive the real `Queue` against a model of an array and two
 counters:
 
 - Any interleaving of pushes and pops is first in, first out and lossless. Over six symbolic steps
   and three nodes, the queue hands nodes back in push order. It agrees with the model on its length
   and emptiness at every step, and Kani checks that no step follows a stale link.
 - A popped node leaves with a clear link, whichever node it was and however many followed it.
+- `remove` of any node, or of one the queue does not hold, from a queue of up to three takes out
+  exactly that node with a clear link and keeps the rest in order. A later push comes out last.
+- `extract_if` with any choice of nodes from a queue of up to three shows the filter each node once
+  in order, splits the queue into the picked and the kept with both in order, and leaves both
+  tails right.
 
 The harnesses cover the list logic. They do not cover the caller's contract: no proof here shows
 that a caller kept a node alive or minted its token from the owning pointer. Miri covers the
@@ -75,8 +80,10 @@ aliasing side through the tests, and the repository's weekly workflow runs it.
 
 A node implements `Node`, an `unsafe` trait whose two methods read and store its link. One `unsafe`
 call, `Unqueued::new`, mints a node into an `Unqueued` token. `Queue::push_back` consumes the
-token and `Queue::pop_front` hands it back. `Queue::iter` walks the queued nodes oldest first and
-yields each as a `NonNull`, which the caller dereferences under the same rules. The token is neither `Clone` nor `Copy`, so a second
+token and `Queue::pop_front` hands it back, as do `Queue::remove`, which takes one node from
+anywhere in the queue, and `Queue::extract_if`, which takes every node a filter picks.
+`Queue::iter` walks the queued nodes oldest first and yields each as a `NonNull`, which the caller
+dereferences under the same rules. The token is neither `Clone` nor `Copy`, so a second
 push of the same node does not compile without a second `unsafe` mint.
 
 The caller keeps three rules, and the documentation cites them by number:
@@ -112,9 +119,10 @@ cargo build --lib --target aarch64-unknown-none-softfloat
 cargo build --lib --target riscv64imac-unknown-none-elf
 ```
 
-The crate has no features, so a plain `cargo test` runs every unit test and doctest. The
-`compile_fail` doctests cover a double push (`E0382`) and a queue of `Rc` nodes sent to another
-thread (`E0277`).
+The crate has no features, so a plain `cargo test` runs every unit test and doctest. A pass
+prints three `test result: ok.` lines with no failures: the unit tests, then the doctests, then the
+`compile_fail` doctests, which rustdoc runs on their own. They cover a double push (`E0382`) and a queue of `Rc` nodes sent
+to another thread (`E0277`).
 
 ### Running the proofs
 
@@ -126,8 +134,9 @@ the Rust toolchain Kani pins, so it needs network access. Then run every harness
 cargo kani
 ```
 
-The two harnesses take about 20 seconds and peak near 220 megabytes of memory, as
-`/usr/bin/time -v cargo kani` measured on a shared 80-core x86_64 host. To run one harness, give
+The four harnesses take about two and a half minutes and peak near 1.3 gigabytes of memory, as
+`/usr/bin/time -v cargo kani` measured on a shared 80-core x86_64 host. The `extract_if` harness
+takes most of that, about 100 seconds. To run one harness, give
 its full path, because `--exact` refuses a bare name:
 
 ```sh
@@ -136,7 +145,7 @@ cargo kani --harness verification::a_popped_node_leaves_with_a_clear_link --exac
 
 A passing run prints lines that look alarming and mean nothing. They are the `use of an unstable
 feature` warning, and many `aborting path on assume(false)` lines, which are paths Kani discards on
-purpose. The answer is the last line, `Complete - 2 successfully verified harnesses, 0 failures, 2
+purpose. The answer is the last line, `Complete - 4 successfully verified harnesses, 0 failures, 4
 total.`, and `cargo kani` exits 0.
 
 ### Running one falsification patch
@@ -158,8 +167,8 @@ check it expects to fail.
 
 ## BUGS
 
-- The queue is singly linked and offers only `push_back`, `pop_front` and a read-only walk,
-  `iter`. Taking one particular node out means popping every node and pushing the others back.
+- The queue is singly linked, so `remove` and `extract_if` walk from the head: taking one node out
+  costs a walk to it.
 - Nothing in the crate checks rule 2. Freeing a node that a queue still holds causes undefined
   behavior at the queue's next touch of it.
 - The proofs stop at six steps over three nodes.

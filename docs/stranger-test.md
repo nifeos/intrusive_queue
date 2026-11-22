@@ -18,4 +18,25 @@ What a run is:
    not against the stranger.
 4. Record the date on the line below.
 
-Last run: none
+Last run: 2026-11-22
+
+## What the last run did
+
+A fresh clone and the README, on a machine that already had Rust, the 1.85 toolchain and Kani
+0.68.0. It followed "Building and testing", "Running the proofs", the falsification commands and
+"Minimum Rust version" command by command.
+
+- `cargo test` passes: 10 unit tests, 5 doctests and 2 compile-fail doctests. The three bare-metal
+  builds finish.
+- `cargo kani` ends with `Complete - 4 successfully verified harnesses, 0 failures, 4 total.`
+  after under three minutes, with the warnings and `aborting path on assume(false)` lines the
+  README says to expect. The one-harness command verifies one harness.
+- The README's three falsification commands do what it says: the patched run names the failed
+  assertion and ends with `0 successfully verified harnesses, 1 failures, 1 total.`, and the
+  reverse patch leaves the tree clean.
+- At Rust 1.85, the stated minimum, `cargo test` and the three bare-metal builds pass.
+
+The run found one gap: the README did not say what a passing `cargo test` prints, three result
+lines a stranger could not tell apart. The README now names each line.
+
+Result: pass.

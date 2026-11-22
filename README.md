@@ -119,9 +119,9 @@ cargo build --lib --target aarch64-unknown-none-softfloat
 cargo build --lib --target riscv64imac-unknown-none-elf
 ```
 
-The crate has no features, so a plain `cargo test` runs every unit test and doctest. It prints
-three `test result: ok.` lines: 11 unit tests, then 6 doctests, then the 2 `compile_fail` doctests,
-which rustdoc runs on their own. They cover a double push (`E0382`) and a queue of `Rc` nodes sent
+The crate has no features, so a plain `cargo test` runs every unit test and doctest. A pass
+prints three `test result: ok.` lines with no failures: the unit tests, then the doctests, then the
+`compile_fail` doctests, which rustdoc runs on their own. They cover a double push (`E0382`) and a queue of `Rc` nodes sent
 to another thread (`E0277`).
 
 ### Running the proofs

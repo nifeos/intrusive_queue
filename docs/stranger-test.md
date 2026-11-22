@@ -36,7 +36,7 @@ A fresh clone and the README, on a machine that already had Rust, the 1.85 toolc
   reverse patch leaves the tree clean.
 - At Rust 1.85, the stated minimum, `cargo test` and the three bare-metal builds pass.
 
-The run found one gap: the README did not say how many tests a passing `cargo test` reports, or
-which of its three result lines is which. The README now gives the three counts.
+The run found one gap: the README did not say what a passing `cargo test` prints, three result
+lines a stranger could not tell apart. The README now names each line.
 
 Result: pass.

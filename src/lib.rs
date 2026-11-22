@@ -299,16 +299,15 @@ impl<T: Node> Default for Queue<T> {
     }
 }
 
-/// Machine-checked proofs. The harness drives the real `Queue` with a symbolic operation sequence
-/// against a trivially-correct model (an array and two counters), covering every push/pop pattern
-/// up to the bound, the regrowth-from-empty transitions included.
-#[cfg(kani)]
-mod verification {
-    use super::*;
+/// The one test node the host tests and the proof harnesses share.
+#[cfg(any(test, kani))]
+mod test_support {
+    use super::{Node, NonNull};
 
-    struct N {
-        next: Option<NonNull<N>>,
-        tag: usize,
+    /// A node whose `tag` says which one it is.
+    pub(crate) struct N {
+        pub(crate) next: Option<NonNull<N>>,
+        pub(crate) tag: usize,
     }
 
     // SAFETY: `next` and `set_next` are plain field storage and touch nothing else, which is the
@@ -321,6 +320,15 @@ mod verification {
             self.next = next;
         }
     }
+}
+
+/// Machine-checked proofs. The harness drives the real `Queue` with a symbolic operation sequence
+/// against a trivially-correct model (an array and two counters), covering every push/pop pattern
+/// up to the bound, the regrowth-from-empty transitions included.
+#[cfg(kani)]
+mod verification {
+    use super::test_support::N;
+    use super::*;
 
     /// Falsification: replayable `falsifications/verification.any_push_pop_interleaving_is_first_in_first_out_and_lossless.patch`
     /// First in, first out order, no loss, no invention, across every operation sequence. Six symbolic
@@ -417,22 +425,8 @@ mod verification {
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::N;
     use super::*;
-
-    struct N {
-        next: Option<NonNull<N>>,
-        tag: u32,
-    }
-
-    // SAFETY: `next` and `set_next` are plain field storage and touch nothing else, which is the whole of the `Node` contract.
-    unsafe impl Node for N {
-        fn next(&self) -> Option<NonNull<Self>> {
-            self.next
-        }
-        fn set_next(&mut self, next: Option<NonNull<Self>>) {
-            self.next = next;
-        }
-    }
 
     /// A test's node, owned through the pointer `Box::into_raw` returned, as a kernel owns a
     /// thread through the pointer its table stores. Every access, the token's and the test's,
@@ -462,7 +456,7 @@ mod tests {
         }
     }
 
-    fn node(tag: u32) -> Owned {
+    fn node(tag: usize) -> Owned {
         Owned(NonNull::new(Box::into_raw(Box::new(N { next: None, tag }))).unwrap())
     }
 
@@ -475,7 +469,7 @@ mod tests {
         unsafe { Unqueued::new(n.0) }
     }
 
-    fn tag(t: &Unqueued<N>) -> u32 {
+    fn tag(t: &Unqueued<N>) -> usize {
         // SAFETY: every token in these tests names one of the test's live boxed nodes.
         unsafe { (*t.as_ptr()).tag }
     }
@@ -499,7 +493,7 @@ mod tests {
         assert_eq!(first, Some(1));
         assert_eq!(q.len(), 2);
 
-        let tags: Vec<u32> = core::iter::from_fn(|| q.pop_front())
+        let tags: Vec<usize> = core::iter::from_fn(|| q.pop_front())
             .map(|t| tag(&t))
             .collect();
         assert_eq!(tags, vec![2, 3]);

@@ -331,15 +331,12 @@ impl<T: Node> Queue<T> {
     /// Take every node `filter` picks out of the queue, oldest first, and hand them back as a
     /// queue of their own. The nodes `filter` passes over stay, in their order.
     ///
-    /// `filter` sees each node once, in queue order, as a pointer, so it can count (take at most
-    /// three) as well as test. Reading the node through that pointer is the caller's `unsafe`, as
-    /// for any queued node; writing its link breaks the `Node` contract. The method does not
-    /// return early: if `filter` panics, the nodes it has already picked are stranded in the
-    /// queue being built, as a dropped queue strands its nodes, and the rest stay queued.
+    /// `filter` sees each node once, in queue order, as a pointer, so it can count as well as test.
+    /// Reading the node is the caller's `unsafe`; writing its link breaks the `Node` contract. If
+    /// `filter` panics, the nodes already picked are stranded, as a dropped queue strands its own.
     ///
-    /// Unlike `Vec::extract_if`, which returns a lazy iterator holding a borrow of the vector, this
-    /// walks the whole queue at once and returns a `Queue`, so the caller holds no borrow of this
-    /// one while it handles the nodes it took.
+    /// Unlike `Vec::extract_if`, which returns a lazy iterator borrowing the vector, this walks the
+    /// whole queue at once and returns a `Queue`, so the caller holds no borrow of this one.
     ///
     /// # Examples
     ///
@@ -360,10 +357,7 @@ impl<T: Node> Queue<T> {
     /// // Wake at most two of the waiters under key 7, first parked first.
     /// let mut left = 2;
     /// // SAFETY: each pointer names one of the live boxed nodes, read between queue operations.
-    /// let mut woken = bucket.extract_if(|w| left > 0 && unsafe { (*w.as_ptr()).key } == 7 && {
-    ///     left -= 1;
-    ///     true
-    /// });
+    /// let mut woken = bucket.extract_if(|w| left > 0 && unsafe { (*w.as_ptr()).key } == 7 && { left -= 1; true });
     /// assert!(woken.pop_front().is_some_and(|t| t == waiters[0]));
     /// assert!(woken.pop_front().is_some_and(|t| t == waiters[2]));
     /// assert!(woken.is_empty());

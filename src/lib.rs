@@ -415,7 +415,67 @@ impl<T: Node> Queue<T> {
         self.len = self.len.wrapping_sub(1);
         Unqueued(node)
     }
+
+    /// The queued nodes, oldest first, as pointers. The walk reads each node's link and nothing
+    /// else, and the shared borrow of the queue stops a push or a pop while it runs, so a caller
+    /// can count or find nodes without taking them off. Dereferencing a pointer it yields is still
+    /// the caller's `unsafe`, under the same rules as a token's.
+    ///
+    /// # Examples
+    ///
+    /// Counting the queued threads that match a test, with the queue left as it was:
+    ///
+    /// ```
+    /// # use core::ptr::NonNull;
+    /// # use intrusive_queue::{Queue, Node, Unqueued};
+    /// # struct Thread { id: u32, next: Option<NonNull<Thread>> }
+    /// # // SAFETY: plain field storage, which is the whole of the `Node` contract.
+    /// # unsafe impl Node for Thread {
+    /// #     fn next(&self) -> Option<NonNull<Self>> { self.next }
+    /// #     fn set_next(&mut self, next: Option<NonNull<Self>>) { self.next = next; }
+    /// # }
+    /// let a = NonNull::new(Box::into_raw(Box::new(Thread { id: 1, next: None }))).unwrap();
+    /// let b = NonNull::new(Box::into_raw(Box::new(Thread { id: 2, next: None }))).unwrap();
+    /// let mut ready: Queue<Thread> = Queue::new();
+    /// // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
+    /// let (token_a, token_b) = unsafe { (Unqueued::new(a), Unqueued::new(b)) };
+    /// ready.push_back(token_a);
+    /// ready.push_back(token_b);
+    /// // SAFETY: each pointer names one of the two live boxed nodes.
+    /// let even = ready.iter().filter(|node| unsafe { node.as_ref() }.id % 2 == 0).count();
+    /// assert_eq!((even, ready.len()), (1, 2));
+    /// while ready.pop_front().is_some() {}
+    /// // SAFETY: both came from `Box::into_raw`, and the queue is empty, so nothing reaches them.
+    /// unsafe { drop((Box::from_raw(a.as_ptr()), Box::from_raw(b.as_ptr()))) };
+    /// ```
+    pub fn iter(&self) -> Iter<'_, T> {
+        Iter {
+            next: self.head,
+            queue: core::marker::PhantomData,
+        }
+    }
 }
+
+/// The walk [`Queue::iter`] returns: each queued node's pointer, oldest first.
+pub struct Iter<'a, T: Node> {
+    next: Option<NonNull<T>>,
+    queue: core::marker::PhantomData<&'a Queue<T>>,
+}
+
+impl<T: Node> Iterator for Iter<'_, T> {
+    type Item = NonNull<T>;
+
+    fn next(&mut self) -> Option<NonNull<T>> {
+        let node = self.next?;
+        // SAFETY: every node between head and tail was pushed with a token and is still valid
+        // (rule 2), and the borrow of the queue this walk holds means no push or pop links or
+        // unlinks one while it runs; the caller writes no link outside the queue (rule 3).
+        self.next = unsafe { (*node.as_ptr()).next() };
+        Some(node)
+    }
+}
+
+impl<T: Node> core::iter::FusedIterator for Iter<'_, T> {}
 
 impl<T: Node> core::fmt::Debug for Queue<T> {
     /// Prints the two end pointers and the count, and walks nothing: a walk would read nodes,
@@ -796,6 +856,37 @@ mod tests {
             format!("Queue {{ head: Some({pointer_a:?}), tail: Some({pointer_a:?}), len: 1 }}")
         );
         q.push_back(second);
+    }
+
+    /// A walk yields the queued nodes oldest first and changes nothing: an empty queue yields
+    /// none, a walk after a pop starts at the new head, and the queue pops in the same order after.
+    #[test]
+    fn a_walk_yields_the_queue_in_order_and_leaves_it() {
+        let (mut a, mut b, mut c) = (node(1), node(2), node(3));
+        let mut q: Queue<N> = Queue::new();
+        assert_eq!(q.iter().next(), None);
+        q.push_back(token(&mut a));
+        q.push_back(token(&mut b));
+        q.push_back(token(&mut c));
+        let walk = |q: &Queue<N>| -> Vec<usize> {
+            q.iter()
+                // SAFETY: every pointer the walk yields names one of the test's live boxed nodes.
+                .map(|p| unsafe { p.as_ref() }.tag)
+                .collect()
+        };
+        assert_eq!(walk(&q), vec![1, 2, 3]);
+        assert_eq!(q.iter().next(), Some(a.0));
+        let first = q.pop_front().unwrap();
+        assert_eq!(walk(&q), vec![2, 3]);
+        q.push_back(first);
+        assert_eq!(walk(&q), vec![2, 3, 1]);
+        let mut iter = q.iter();
+        assert_eq!(iter.by_ref().count(), 3);
+        assert_eq!(iter.next(), None);
+        let tags: Vec<usize> = core::iter::from_fn(|| q.pop_front())
+            .map(|t| tag(&t))
+            .collect();
+        assert_eq!(tags, vec![2, 3, 1]);
     }
 
     /// A popped node leaves with a clean link: it does not secretly point back into the queue.

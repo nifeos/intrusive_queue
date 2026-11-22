@@ -81,7 +81,9 @@ aliasing side through the tests, and the repository's weekly workflow runs it.
 A node implements `Node`, an `unsafe` trait whose two methods read and store its link. One `unsafe`
 call, `Unqueued::new`, mints a node into an `Unqueued` token. `Queue::push_back` consumes the
 token and `Queue::pop_front` hands it back, as do `Queue::remove`, which takes one node from
-anywhere in the queue, and `Queue::extract_if`, which takes every node a filter picks. The token is neither `Clone` nor `Copy`, so a second
+anywhere in the queue, and `Queue::extract_if`, which takes every node a filter picks.
+`Queue::iter` walks the queued nodes oldest first and yields each as a `NonNull`, which the caller
+dereferences under the same rules. The token is neither `Clone` nor `Copy`, so a second
 push of the same node does not compile without a second `unsafe` mint.
 
 The caller keeps three rules, and the documentation cites them by number:
@@ -118,7 +120,7 @@ cargo build --lib --target riscv64imac-unknown-none-elf
 ```
 
 The crate has no features, so a plain `cargo test` runs every unit test and doctest. It prints
-three `test result: ok.` lines: 10 unit tests, then 5 doctests, then the 2 `compile_fail` doctests,
+three `test result: ok.` lines: 11 unit tests, then 6 doctests, then the 2 `compile_fail` doctests,
 which rustdoc runs on their own. They cover a double push (`E0382`) and a queue of `Rc` nodes sent
 to another thread (`E0277`).
 

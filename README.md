@@ -67,7 +67,7 @@ counters:
   and emptiness at every step, and Kani checks that no step follows a stale link.
 - A popped node leaves with a clear link, whichever node it was and however many followed it.
 - `remove` of any node, or of one the queue does not hold, from a queue of up to three takes out
-  exactly that node with a clear link and keeps the rest in order, and a later push comes out last.
+  exactly that node with a clear link and keeps the rest in order. A later push comes out last.
 - `extract_if` with any choice of nodes from a queue of up to three shows the filter each node once
   in order, splits the queue into the picked and the kept with both in order, and leaves both
   tails right.

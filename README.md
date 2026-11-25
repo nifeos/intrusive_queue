@@ -1,9 +1,9 @@
 # intrusive_queue
 
-[![check](https://github.com/nifeos/intrusive_queue/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/nifeos/intrusive_queue/actions/workflows/ci.yml?query=branch%3Amain)
-[![proofs](https://github.com/nifeos/intrusive_queue/actions/workflows/proofs.yml/badge.svg?branch=main)](https://github.com/nifeos/intrusive_queue/actions/workflows/proofs.yml?query=branch%3Amain)
-[![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/nifeos/intrusive_queue#license)
-[![minimum Rust version](https://img.shields.io/badge/rust-1.85%2B-blue.svg)](https://github.com/nifeos/intrusive_queue/blob/main/Cargo.toml)
+[![check](https://github.com/partsfoundry/intrusive_queue/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/partsfoundry/intrusive_queue/actions/workflows/ci.yml?query=branch%3Amain)
+[![proofs](https://github.com/partsfoundry/intrusive_queue/actions/workflows/proofs.yml/badge.svg?branch=main)](https://github.com/partsfoundry/intrusive_queue/actions/workflows/proofs.yml?query=branch%3Amain)
+[![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](https://github.com/partsfoundry/intrusive_queue#license)
+[![minimum Rust version](https://img.shields.io/badge/rust-1.85%2B-blue.svg)](https://github.com/partsfoundry/intrusive_queue/blob/main/Cargo.toml)
 
 An intrusive first in, first out queue. The link lives inside the node, so a push and a pop
 cannot allocate or fail, and a pop hands back the node itself. The queue is two pointers and a

@@ -12,7 +12,7 @@ whenever it held a node.
 diff --git a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -399,8 +399,6 @@
+@@ -427,8 +427,6 @@
          // Wrapping: the two counts are of distinct live nodes, so their sum is a count of distinct
          // live nodes too, which never reaches `usize::MAX`, as in `push_back`.
          self.len = self.len.wrapping_add(other.len);

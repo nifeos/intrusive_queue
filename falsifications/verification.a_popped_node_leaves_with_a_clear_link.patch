@@ -11,7 +11,7 @@ more nodes were queued.
 diff --git a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -416,7 +416,6 @@
+@@ -444,7 +444,6 @@
              if self.head.is_none() {
                  self.tail = None;
              }

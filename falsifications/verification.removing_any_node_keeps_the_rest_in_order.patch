@@ -12,7 +12,7 @@ is lost.
 diff --git a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -548,9 +548,6 @@
+@@ -578,9 +578,6 @@
                  Some(previous) => write_link(previous, next),
                  None => self.head = next,
              }

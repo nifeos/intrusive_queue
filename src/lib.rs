@@ -171,7 +171,7 @@ impl<T> core::fmt::Debug for Unqueued<T> {
 /// unsafe { drop((Box::from_raw(a.as_ptr()), Box::from_raw(b.as_ptr()))) };
 /// ```
 #[doc(alias = "fifo")]
-pub struct Queue<T: Node> {
+pub struct Queue<T> {
     head: Option<NonNull<T>>,
     tail: Option<NonNull<T>>,
     /// How many nodes the queue holds (`len`, the standard library's `LinkedList::len`).
@@ -198,9 +198,9 @@ pub struct Queue<T: Node> {
 // SAFETY: the queue owns no data; it holds nodes only under the caller's contract (rule 3: all
 // access serialized by the caller). Moving the queue moves access to its nodes with it, so the
 // nodes must be `Send`, as for `LinkedList`.
-unsafe impl<T: Node + Send> Send for Queue<T> {}
+unsafe impl<T: Send> Send for Queue<T> {}
 
-impl<T: Node> Queue<T> {
+impl<T> Queue<T> {
     /// An empty queue.
     pub const fn new() -> Self {
         Self {
@@ -219,7 +219,9 @@ impl<T: Node> Queue<T> {
     pub fn len(&self) -> usize {
         self.len
     }
+}
 
+impl<T: Node> Queue<T> {
     /// Append a node, consuming its token. Safe: the token is the proof that the node is valid
     /// and on no queue, and taking it by value is what stops the same node being pushed twice.
     ///
@@ -451,7 +453,7 @@ impl<T: Node> Queue<T> {
 }
 
 /// The walk [`Queue::iter`] returns: each queued node's pointer, oldest first.
-pub struct Iter<'a, T: Node> {
+pub struct Iter<'a, T> {
     next: Option<NonNull<T>>,
     queue: core::marker::PhantomData<&'a Queue<T>>,
 }
@@ -471,7 +473,7 @@ impl<T: Node> Iterator for Iter<'_, T> {
 
 impl<T: Node> core::iter::FusedIterator for Iter<'_, T> {}
 
-impl<T: Node> core::fmt::Debug for Queue<T> {
+impl<T> core::fmt::Debug for Queue<T> {
     /// Prints the two end pointers and the count, and walks nothing: a walk would read nodes,
     /// which only the caller may do (rule 3).
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -483,7 +485,7 @@ impl<T: Node> core::fmt::Debug for Queue<T> {
     }
 }
 
-impl<T: Node> Default for Queue<T> {
+impl<T> Default for Queue<T> {
     fn default() -> Self {
         Self::new()
     }

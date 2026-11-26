@@ -82,11 +82,11 @@ aliasing side through the tests, and the repository's weekly workflow runs it.
 A node carries a `Link` field and implements `Node`, an `unsafe` trait whose one method projects
 from a pointer to the node to that field. The link keeps its pointer in an `UnsafeCell` behind a
 private field, so the queue writes it without forming a reference to the rest of the node, and no
-caller can write it at all. One `unsafe`
-call, `Unqueued::new`, mints a node into an `Unqueued` token. `Queue::push_back` consumes the
+caller can write it at all. One `unsafe` call, `Unqueued::new`, mints a node into an `Unqueued` token. `Queue::push_back` consumes the
 token and `Queue::pop_front` hands it back, as do `Queue::remove`, which takes one node from
-anywhere in the queue, and `Queue::extract_if`, which takes every node a filter picks. `Queue::append` moves every node of
-one queue to the back of another, and `Queue::front` names the oldest node without taking it.
+anywhere in the queue, and `Queue::extract_if`, which takes every node a filter picks.
+`Queue::append` moves every node of one queue to the back of another, and `Queue::front` names the
+oldest node without taking it.
 `Queue::iter` walks the queued nodes oldest first and yields each as a `NonNull`, which the caller
 dereferences under the same rules. The token is neither `Clone` nor `Copy`, so a second
 push of the same node does not compile without a second `unsafe` mint.
@@ -111,8 +111,9 @@ A dropped token strands its node, and so does a dropped queue that still holds n
 one again needs a fresh mint. `Queue` has no `Drop`, so a caller can move a queue by value through
 `Default` and `core::mem::take`.
 
-`Queue<T>` is `Send` only when `T` is, as `LinkedList<T>` is. `Unqueued<T>` is never `Send`, since
-`NonNull<T>` is not.
+`Queue<T>` is `Send` only when `T` is, and `Sync` only when `T` is, as `LinkedList<T>` is.
+`Link<T>` follows the same rule, so a node built on it is `Send` or `Sync` exactly when its other
+fields are. `Unqueued<T>` is never `Send`, since `NonNull<T>` is not.
 
 ## Building and testing
 
@@ -126,8 +127,9 @@ cargo build --lib --target riscv64imac-unknown-none-elf
 
 The crate has no features, so a plain `cargo test` runs every unit test and doctest. A pass
 prints three `test result: ok.` lines with no failures: the unit tests, then the doctests, then the
-`compile_fail` doctests, which rustdoc runs on their own. They cover a double push (`E0382`) and a queue of `Rc` nodes sent
-to another thread (`E0277`).
+`compile_fail` doctests, which rustdoc runs on their own. They cover a double push (`E0382`), a
+queue of `Rc` nodes sent to another thread (`E0277`) and a queue of `Cell` nodes shared with
+another thread (`E0277`).
 
 ### Running the proofs
 

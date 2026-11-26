@@ -280,6 +280,34 @@ pub struct Queue<T> {
 // nodes must be `Send`, as for `LinkedList`.
 unsafe impl<T: Send> Send for Queue<T> {}
 
+/// A `Queue<T>` is [`Sync`] only when `T` is, as `LinkedList<T>` is. A shared queue offers
+/// `is_empty`, `len`, `front` and `iter`, which read the queue and its links and write nothing. A
+/// `Cell` in a node keeps a shared queue on its own thread:
+///
+/// ```compile_fail,E0277
+/// # use core::cell::Cell;
+/// # use core::ptr::NonNull;
+/// # use intrusive_queue::{Link, Node, Queue};
+/// struct Counted { hits: Cell<u32>, link: Link<Counted> }
+/// // SAFETY: a projection to the link field, which is the whole of the `Node` contract.
+/// unsafe impl Node for Counted {
+///     unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
+///         // SAFETY: `this` is a live node (the caller's promise); this projects to its field.
+///         unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
+///     }
+/// }
+/// let queue: Queue<Counted> = Queue::new();
+/// std::thread::scope(|s| {
+///     s.spawn(|| queue.len());
+/// });
+/// ```
+// SAFETY: through a shared reference the queue only reads: its own fields, and the links of its
+// nodes in a walk. Two threads that read at once race on nothing, and no writer can run while the
+// shared borrow lives, since every write takes `&mut self` and the caller writes no link (rule 3).
+// The walk yields pointers to the nodes, which another thread may then read, so the nodes must be
+// `Sync`, as for `LinkedList`.
+unsafe impl<T: Sync> Sync for Queue<T> {}
+
 impl<T> Queue<T> {
     /// An empty queue.
     pub const fn new() -> Self {
@@ -1211,6 +1239,24 @@ mod tests {
             assert_eq!(drain(&mut q), expect);
             assert_eq!(drain(&mut r), vec![5]);
         }
+    }
+
+    /// A queue of `Sync` nodes is `Sync`: two threads may walk one shared queue at once.
+    #[test]
+    fn a_shared_queue_walks_from_two_threads() {
+        fn assert_sync<S: Sync>(_: &S) {}
+        let (mut a, mut b) = (node(1), node(2));
+        let mut q: Queue<N> = Queue::new();
+        q.push_back(token(&mut a));
+        q.push_back(token(&mut b));
+        assert_sync(&q);
+        std::thread::scope(|s| {
+            let walks = [s.spawn(|| q.iter().count()), s.spawn(|| q.iter().count())];
+            for walk in walks {
+                assert_eq!(walk.join().ok(), Some(2));
+            }
+        });
+        assert_eq!(drain(&mut q), vec![1, 2]);
     }
 
     /// A popped node leaves with a clean link: it does not secretly point back into the queue.

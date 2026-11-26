@@ -11,11 +11,11 @@ more nodes were queued.
 diff --git a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -272,7 +272,6 @@
+@@ -444,7 +444,6 @@
              if self.head.is_none() {
                  self.tail = None;
              }
--            (*node.as_ptr()).set_next(None);
+-            write_link(node, None);
          }
          // Wrapping: `head` was `Some`, so `len >= 1`. The Kani proof below holds `len` to the
          // model's count after every step, so a wrapped decrement would fail it.

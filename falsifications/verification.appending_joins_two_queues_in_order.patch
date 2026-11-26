@@ -1,0 +1,23 @@
+Falsifies `intrusive_queue::verification::appending_joins_two_queues_in_order`.
+
+The defect: `append` stops emptying the queue it took the nodes from. The lines read as
+tidying, because every node already sits on the first queue and the join is right, so the first
+queue's order and count stay correct. The second queue still names the moved nodes as its head
+and tail, so its next push links a node behind one that now belongs to the other queue, and both
+queues walk the same nodes.
+
+Expected to fail: the harness's assertion that the second queue is empty after the append,
+whenever it held a node.
+
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -427,8 +427,6 @@
+         // Wrapping: the two counts are of distinct live nodes, so their sum is a count of distinct
+         // live nodes too, which never reaches `usize::MAX`, as in `push_back`.
+         self.len = self.len.wrapping_add(other.len);
+-        other.head = None;
+-        other.tail = None;
+         other.len = 0;
+     }
+ 

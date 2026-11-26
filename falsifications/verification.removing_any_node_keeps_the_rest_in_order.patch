@@ -12,13 +12,13 @@ is lost.
 diff --git a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -406,9 +406,6 @@ impl<T: Node> Queue<T> {
-                 Some(previous) => (*previous.as_ptr()).set_next(next),
+@@ -578,9 +578,6 @@
+                 Some(previous) => write_link(previous, next),
                  None => self.head = next,
              }
 -            if next.is_none() {
 -                self.tail = previous;
 -            }
-             (*node.as_ptr()).set_next(None);
+             write_link(node, None);
          }
          // Wrapping: `node` was on the queue, so `len >= 1`, as in `pop_front`.

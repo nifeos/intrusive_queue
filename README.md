@@ -10,7 +10,7 @@ cannot allocate or fail, and a pop hands back the node itself. The queue is two 
 count, and it owns none of its nodes. That makes a push legal where allocation is not, such as an
 interrupt handler or a scheduler's run queue.
 
-The crate is `no_std`, has no dependencies, and is dual licensed `MIT OR Apache-2.0`. Four Kani
+The crate is `no_std`, has no dependencies, and is dual licensed `MIT OR Apache-2.0`. Five Kani
 harnesses prove its list logic, and each carries a falsification patch that shows what turns it
 red.
 
@@ -20,33 +20,32 @@ A run queue: threads leave in the order they arrived.
 
 ```rust
 use core::ptr::NonNull;
-use intrusive_queue::{Node, Queue, Unqueued};
+use intrusive_queue::{Link, Node, Queue, Unqueued};
 
 struct Thread {
     id: u32,
-    next: Option<NonNull<Thread>>,
+    link: Link<Thread>,
 }
 
-// SAFETY: `next` and `set_next` are plain field storage and touch nothing else, which is the whole
-// of the `Node` contract.
+// SAFETY: `link` projects to the `link` field by `&raw mut`, forms no reference and does nothing
+// else, which is the whole of the `Node` contract.
 unsafe impl Node for Thread {
-    fn next(&self) -> Option<NonNull<Self>> {
-        self.next
-    }
-    fn set_next(&mut self, next: Option<NonNull<Self>>) {
-        self.next = next;
+    unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
+        // SAFETY: `this` is a live node (the caller's promise), and a field of a non-null pointer
+        // to a live value is non-null.
+        unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
     }
 }
 
-let a = NonNull::new(Box::into_raw(Box::new(Thread { id: 1, next: None }))).unwrap();
-let b = NonNull::new(Box::into_raw(Box::new(Thread { id: 2, next: None }))).unwrap();
+let a = NonNull::new(Box::into_raw(Box::new(Thread { id: 1, link: Link::new() }))).ok_or("null box")?;
+let b = NonNull::new(Box::into_raw(Box::new(Thread { id: 2, link: Link::new() }))).ok_or("null box")?;
 let mut ready: Queue<Thread> = Queue::new();
 // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
 let (token_a, token_b) = unsafe { (Unqueued::new(a), Unqueued::new(b)) };
 ready.push_back(token_a);
 ready.push_back(token_b);
 
-let first = ready.pop_front().unwrap();
+let first = ready.pop_front().ok_or("empty queue")?;
 ready.push_back(first);
 let order: Vec<u32> = core::iter::from_fn(|| ready.pop_front())
     // SAFETY: each token names one of the two live boxed nodes.
@@ -55,11 +54,12 @@ let order: Vec<u32> = core::iter::from_fn(|| ready.pop_front())
 assert_eq!(order, vec![2, 1]);
 // SAFETY: both came from `Box::into_raw`, and the queue is empty, so nothing reaches them.
 unsafe { drop((Box::from_raw(a.as_ptr()), Box::from_raw(b.as_ptr()))) };
+# Ok::<(), &str>(())
 ```
 
 ## What is proven
 
-Four Kani harnesses in `src/lib.rs` drive the real `Queue` against a model of an array and two
+Five Kani harnesses in `src/lib.rs` drive the real `Queue` against a model of an array and two
 counters:
 
 - Any interleaving of pushes and pops is first in, first out and lossless. Over six symbolic steps
@@ -71,6 +71,8 @@ counters:
 - `extract_if` with any choice of nodes from a queue of up to three shows the filter each node once
   in order, splits the queue into the picked and the kept with both in order, and leaves both
   tails right.
+- `append` of a queue of up to two nodes to another of up to two leaves every node on the first in
+  order and the second empty, and a later push onto either comes out of that one alone.
 
 The harnesses cover the list logic. They do not cover the caller's contract: no proof here shows
 that a caller kept a node alive or minted its token from the owning pointer. Miri covers the
@@ -78,10 +80,14 @@ aliasing side through the tests, and the repository's weekly workflow runs it.
 
 ## The caller's contract
 
-A node implements `Node`, an `unsafe` trait whose two methods read and store its link. One `unsafe`
-call, `Unqueued::new`, mints a node into an `Unqueued` token. `Queue::push_back` consumes the
+A node carries a `Link` field and implements `Node`, an `unsafe` trait whose one method projects
+from a pointer to the node to that field. The link keeps its pointer in an `UnsafeCell` behind a
+private field, so the queue writes it without forming a reference to the rest of the node, and no
+caller can write it at all. One `unsafe` call, `Unqueued::new`, mints a node into an `Unqueued` token. `Queue::push_back` consumes the
 token and `Queue::pop_front` hands it back, as do `Queue::remove`, which takes one node from
 anywhere in the queue, and `Queue::extract_if`, which takes every node a filter picks.
+`Queue::append` moves every node of one queue to the back of another, and `Queue::front` names the
+oldest node without taking it.
 `Queue::iter` walks the queued nodes oldest first and yields each as a `NonNull`, which the caller
 dereferences under the same rules. The token is neither `Clone` nor `Copy`, so a second
 push of the same node does not compile without a second `unsafe` mint.
@@ -106,8 +112,9 @@ A dropped token strands its node, and so does a dropped queue that still holds n
 one again needs a fresh mint. `Queue` has no `Drop`, so a caller can move a queue by value through
 `Default` and `core::mem::take`.
 
-`Queue<T>` is `Send` only when `T` is, as `LinkedList<T>` is. `Unqueued<T>` is never `Send`, since
-`NonNull<T>` is not.
+`Queue<T>` is `Send` only when `T` is, and `Sync` only when `T` is, as `LinkedList<T>` is.
+`Link<T>` follows the same rule, so a node built on it is `Send` or `Sync` exactly when its other
+fields are. `Unqueued<T>` is never `Send`, since `NonNull<T>` is not.
 
 ## Building and testing
 
@@ -121,8 +128,9 @@ cargo build --lib --target riscv64imac-unknown-none-elf
 
 The crate has no features, so a plain `cargo test` runs every unit test and doctest. A pass
 prints three `test result: ok.` lines with no failures: the unit tests, then the doctests, then the
-`compile_fail` doctests, which rustdoc runs on their own. They cover a double push (`E0382`) and a queue of `Rc` nodes sent
-to another thread (`E0277`).
+`compile_fail` doctests, which rustdoc runs on their own. They cover a double push (`E0382`), a
+queue of `Rc` nodes sent to another thread (`E0277`) and a queue of `Cell` nodes shared with
+another thread (`E0277`).
 
 ### Running the proofs
 
@@ -134,10 +142,9 @@ the Rust toolchain Kani pins, so it needs network access. Then run every harness
 cargo kani
 ```
 
-The four harnesses take about two and a half minutes and peak near 1.3 gigabytes of memory, as
-`/usr/bin/time -v cargo kani` measured on a shared 80-core x86_64 host. The `extract_if` harness
-takes most of that, about 100 seconds. To run one harness, give
-its full path, because `--exact` refuses a bare name:
+The five harnesses take about two minutes of wall time (111 seconds) and peak near 1.2 gigabytes
+of memory, as `/usr/bin/time` measured `cargo kani` on a Linux x86_64 host with other work running.
+To run one harness, give its full path, because `--exact` refuses a bare name:
 
 ```sh
 cargo kani --harness verification::a_popped_node_leaves_with_a_clear_link --exact
@@ -145,7 +152,7 @@ cargo kani --harness verification::a_popped_node_leaves_with_a_clear_link --exac
 
 A passing run prints lines that look alarming and mean nothing. They are the `use of an unstable
 feature` warning, and many `aborting path on assume(false)` lines, which are paths Kani discards on
-purpose. The answer is the last line, `Complete - 4 successfully verified harnesses, 0 failures, 4
+purpose. The answer is the last line, `Complete - 5 successfully verified harnesses, 0 failures, 5
 total.`, and `cargo kani` exits 0.
 
 ### Running one falsification patch
@@ -160,7 +167,7 @@ patch -R -p1 --no-backup-if-mismatch < falsifications/verification.a_popped_node
 ```
 
 The failing run prints
-`Failed Checks: assertion failed: unsafe { (*token.as_ptr()).next() }.is_none()` and
+`Failed Checks: assertion failed: unsafe { read_link(token.as_non_null()) }.is_none()` and
 `VERIFICATION:- FAILED`. It ends with
 `Complete - 0 successfully verified harnesses, 1 failures, 1 total.`, and `cargo kani` exits 1. Each patch's opening lines name the
 check it expects to fail.

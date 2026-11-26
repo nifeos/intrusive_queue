@@ -11,19 +11,19 @@ the filter picks a node that has another node behind it.
 diff --git a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -379,7 +379,6 @@ impl<T: Node> Queue<T> {
+@@ -551,7 +551,6 @@
          while let Some(node) = cursor {
              // SAFETY: as in `remove`. The link is read before `node` can leave, because leaving
              // clears it.
--            cursor = unsafe { (*node.as_ptr()).next() };
+-            cursor = unsafe { read_link(node) };
              if filter(node) {
                  // SAFETY: `node` is on this queue, and `previous` is the last node the walk kept,
                  // which is the node just before it.
-@@ -387,6 +386,7 @@ impl<T: Node> Queue<T> {
+@@ -559,6 +558,7 @@
              } else {
                  previous = Some(node);
              }
-+            cursor = unsafe { (*node.as_ptr()).next() };
++            cursor = unsafe { read_link(node) };
          }
          extracted
      }

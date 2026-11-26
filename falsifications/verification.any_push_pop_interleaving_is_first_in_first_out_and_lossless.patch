@@ -14,13 +14,13 @@ thread that never runs again.
 diff --git a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -269,9 +269,6 @@
+@@ -353,9 +353,6 @@
          // (rule 2, the token's minting contract); we are the only accessor (rule 3).
          unsafe {
-             self.head = (*node.as_ptr()).next();
+             self.head = read_link(node);
 -            if self.head.is_none() {
 -                self.tail = None;
 -            }
-             (*node.as_ptr()).set_next(None);
+             write_link(node, None);
          }
          // Wrapping: `head` was `Some`, so `len >= 1`. The Kani proof below holds `len` to the

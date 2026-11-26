@@ -12,6 +12,7 @@
 
 #![cfg_attr(not(test), no_std)]
 
+use core::cell::UnsafeCell;
 use core::ptr::NonNull;
 
 /// The README's examples, compiled and run as doctests.
@@ -19,12 +20,20 @@ use core::ptr::NonNull;
 #[doc = include_str!("../README.md")]
 struct ReadmeExample;
 
-/// A type that carries its own queue link.
+/// A type that carries its own queue link, a [`Link`] field the queue reaches through
+/// [`link`](Self::link).
+///
+/// The queue never forms a reference to a node. It projects from the node's pointer to the
+/// [`Link`], and the link keeps its pointer in an `UnsafeCell`, so writing it is not a write to
+/// the rest of the node. Rule 3 still asks that no reference to a queued node be live across a
+/// queue operation; this shape is what lets a later release narrow that rule to the link alone
+/// without breaking a caller.
 ///
 /// # Safety
 ///
-/// `next`/`set_next` must be plain storage: reading back exactly what was stored, touching
-/// nothing else. The queue threads its structure through these two methods, so a clever
+/// `link` must return a pointer to a `Link<Self>` field of `*this`, the same field on every call,
+/// derived from `this` without forming a reference to the node (`&raw mut`, as below), and must
+/// do nothing else. The queue threads its structure through that field, so any other
 /// implementation is a corrupted queue.
 ///
 /// # Examples
@@ -33,29 +42,96 @@ struct ReadmeExample;
 ///
 /// ```
 /// use core::ptr::NonNull;
-/// use intrusive_queue::Node;
+/// use intrusive_queue::{Link, Node};
 ///
 /// struct Thread {
 ///     tid: u32,
-///     next: Option<NonNull<Thread>>,
+///     link: Link<Thread>,
 /// }
 ///
-/// // SAFETY: `next` and `set_next` are plain field storage and touch nothing else, which is the
-/// // whole of the `Node` contract. A clever implementation here is a corrupted queue.
+/// // SAFETY: `link` projects to the `link` field by `&raw mut`, forms no reference and does
+/// // nothing else, which is the whole of the `Node` contract.
 /// unsafe impl Node for Thread {
-///     fn next(&self) -> Option<NonNull<Self>> {
-///         self.next
-///     }
-///     fn set_next(&mut self, next: Option<NonNull<Self>>) {
-///         self.next = next;
+///     unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
+///         // SAFETY: `this` is a live node (the caller's promise), and a field of a non-null
+///         // pointer to a live value is non-null.
+///         unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
 ///     }
 /// }
 /// ```
 pub unsafe trait Node: Sized {
-    /// Read back the link stored by the most recent [`set_next`](Self::set_next).
-    fn next(&self) -> Option<NonNull<Self>>;
-    /// Store the link. Plain storage only; see the trait's safety section.
-    fn set_next(&mut self, next: Option<NonNull<Self>>);
+    /// The node's link field, projected from `this` without forming a reference to the node.
+    ///
+    /// # Safety
+    ///
+    /// `this` points to a live node of this type.
+    unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>>;
+}
+
+/// The queue link a [`Node`] carries: one pointer, to the node behind it, that only the queue
+/// reads or writes.
+///
+/// Its field is private and sits in an `UnsafeCell`, so the queue may write it while the caller
+/// holds a shared reference elsewhere in the node, and no caller can write it by mistake. A node
+/// gets one from [`Link::new`] and otherwise leaves it alone. The link is one pointer wide.
+pub struct Link<T> {
+    next: UnsafeCell<Option<NonNull<T>>>,
+}
+
+impl<T> Link<T> {
+    /// A link for a node on no queue.
+    pub const fn new() -> Self {
+        Self {
+            next: UnsafeCell::new(None),
+        }
+    }
+}
+
+impl<T> Default for Link<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T> core::fmt::Debug for Link<T> {
+    /// Prints no pointer: reading the link is the queue's alone (rule 3).
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Link").finish_non_exhaustive()
+    }
+}
+
+// SAFETY: a link holds a pointer to another `T` and offers no access to it; only a queue reads or
+// writes it, under rule 3. Moving one moves that pointer, which is sound when `T` may move between
+// threads, as for `LinkedList<T>`.
+unsafe impl<T: Send> Send for Link<T> {}
+
+// SAFETY: a shared `Link` offers no method that reads or writes the cell, so sharing one shares
+// nothing; the queue reaches it through raw pointers under rule 3.
+unsafe impl<T: Sync> Sync for Link<T> {}
+
+/// The link stored after `node`, read through the node's projection.
+///
+/// # Safety
+///
+/// `node` points to a live node, and nothing writes its link during the call (rule 3).
+#[inline(always)]
+unsafe fn read_link<T: Node>(node: NonNull<T>) -> Option<NonNull<T>> {
+    // SAFETY: `node` is live (the caller's promise), so `link` returns a pointer to its live
+    // `Link`; `raw_get` reaches the cell's contents without forming a reference to the node, and
+    // nothing writes them during the read.
+    unsafe { *UnsafeCell::raw_get(&raw const (*T::link(node).as_ptr()).next) }
+}
+
+/// Store `next` as the link after `node`, through the node's projection.
+///
+/// # Safety
+///
+/// `node` points to a live node, and nothing else reads or writes its link during the call
+/// (rule 3).
+#[inline(always)]
+unsafe fn write_link<T: Node>(node: NonNull<T>, next: Option<NonNull<T>>) {
+    // SAFETY: as in `read_link`; the queue is the only writer of a link (rule 3).
+    unsafe { *UnsafeCell::raw_get(&raw mut (*T::link(node).as_ptr()).next) = next }
 }
 
 /// Proof that one node is on no queue, and the only thing a queue will take.
@@ -143,15 +219,17 @@ impl<T> core::fmt::Debug for Unqueued<T> {
 ///
 /// ```
 /// # use core::ptr::NonNull;
-/// # use intrusive_queue::{Queue, Node, Unqueued};
-/// # struct Thread { tid: u32, next: Option<NonNull<Thread>> }
+/// # use intrusive_queue::{Link, Node, Queue, Unqueued};
+/// # struct Thread { tid: u32, link: Link<Thread> }
 /// # // SAFETY: plain field storage, which is the whole of the `Node` contract.
 /// # unsafe impl Node for Thread {
-/// #     fn next(&self) -> Option<NonNull<Self>> { self.next }
-/// #     fn set_next(&mut self, next: Option<NonNull<Self>>) { self.next = next; }
+/// #     unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
+/// #         // SAFETY: `this` is a live node (the caller's promise); this projects to its field.
+/// #         unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
+/// #     }
 /// # }
-/// let a = NonNull::new(Box::into_raw(Box::new(Thread { tid: 1, next: None }))).unwrap();
-/// let b = NonNull::new(Box::into_raw(Box::new(Thread { tid: 2, next: None }))).unwrap();
+/// let a = NonNull::new(Box::into_raw(Box::new(Thread { tid: 1, link: Link::new() }))).unwrap();
+/// let b = NonNull::new(Box::into_raw(Box::new(Thread { tid: 2, link: Link::new() }))).unwrap();
 /// let mut q: Queue<Thread> = Queue::new();
 /// // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
 /// let (ta, tb) = unsafe { (Unqueued::new(a), Unqueued::new(b)) };
@@ -185,12 +263,14 @@ pub struct Queue<T> {
 /// ```compile_fail,E0277
 /// # use core::ptr::NonNull;
 /// # use std::rc::Rc;
-/// # use intrusive_queue::{Queue, Node};
-/// struct Logged { log: Rc<u32>, next: Option<NonNull<Logged>> }
+/// # use intrusive_queue::{Link, Node, Queue};
+/// struct Logged { log: Rc<u32>, link: Link<Logged> }
 /// // SAFETY: plain field storage, which is the whole of the `Node` contract.
 /// unsafe impl Node for Logged {
-///     fn next(&self) -> Option<NonNull<Self>> { self.next }
-///     fn set_next(&mut self, next: Option<NonNull<Self>>) { self.next = next; }
+///     unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
+///         // SAFETY: `this` is a live node (the caller's promise); this projects to its field.
+///         unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
+///     }
 /// }
 /// let queue: Queue<Logged> = Queue::new();
 /// std::thread::spawn(move || drop(queue));
@@ -231,13 +311,15 @@ impl<T: Node> Queue<T> {
     ///
     /// ```compile_fail,E0382
     /// # use core::ptr::NonNull;
-    /// # use intrusive_queue::{Queue, Node, Unqueued};
-    /// # struct T { next: Option<NonNull<T>> }
+    /// # use intrusive_queue::{Link, Node, Queue, Unqueued};
+    /// # struct T { link: Link<T> }
     /// # unsafe impl Node for T {
-    /// #     fn next(&self) -> Option<NonNull<Self>> { self.next }
-    /// #     fn set_next(&mut self, next: Option<NonNull<Self>>) { self.next = next; }
+    /// #     unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
+    /// #         // SAFETY: `this` is a live node (the caller's promise); this projects to its field.
+    /// #         unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
+    /// #     }
     /// # }
-    /// # let mut b = T { next: None };
+    /// # let mut b = T { link: Link::new() };
     /// # let (mut ready, mut inbox) = (Queue::<T>::new(), Queue::<T>::new());
     /// // SAFETY: `b` is live, on no queue, has no token yet, and is not named again.
     /// let token = unsafe { Unqueued::new(NonNull::new(&raw mut b).unwrap()) };
@@ -248,11 +330,11 @@ impl<T: Node> Queue<T> {
         let node = node.0;
         // SAFETY: valid and on no queue, which is what `Unqueued::new`'s caller promised for this
         // token; and the token is consumed, so no other push can link this node until a pop.
-        unsafe { (*node.as_ptr()).set_next(None) };
+        unsafe { write_link(node, None) };
 
         match self.tail {
             // SAFETY: `tail` was pushed earlier with its token and not yet popped, so it is valid.
-            Some(tail) => unsafe { (*tail.as_ptr()).set_next(Some(node)) },
+            Some(tail) => unsafe { write_link(tail, Some(node)) },
             None => self.head = Some(node),
         }
         self.tail = Some(node);
@@ -270,11 +352,11 @@ impl<T: Node> Queue<T> {
         // SAFETY: every node between head and tail was pushed with a token and is still valid
         // (rule 2, the token's minting contract); we are the only accessor (rule 3).
         unsafe {
-            self.head = (*node.as_ptr()).next();
+            self.head = read_link(node);
             if self.head.is_none() {
                 self.tail = None;
             }
-            (*node.as_ptr()).set_next(None);
+            write_link(node, None);
         }
         // Wrapping: `head` was `Some`, so `len >= 1`. The Kani proof below holds `len` to the
         // model's count after every step, so a wrapped decrement would fail it.
@@ -293,14 +375,16 @@ impl<T: Node> Queue<T> {
     ///
     /// ```
     /// # use core::ptr::NonNull;
-    /// # use intrusive_queue::{Queue, Node, Unqueued};
-    /// # struct Thread { next: Option<NonNull<Thread>> }
+    /// # use intrusive_queue::{Link, Node, Queue, Unqueued};
+    /// # struct Thread { link: Link<Thread> }
     /// # // SAFETY: plain field storage, which is the whole of the `Node` contract.
     /// # unsafe impl Node for Thread {
-    /// #     fn next(&self) -> Option<NonNull<Self>> { self.next }
-    /// #     fn set_next(&mut self, next: Option<NonNull<Self>>) { self.next = next; }
+    /// #     unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
+    /// #         // SAFETY: `this` is a live node (the caller's promise); this projects to its field.
+    /// #         unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
+    /// #     }
     /// # }
-    /// let [a, b, c] = [(); 3].map(|()| NonNull::new(Box::into_raw(Box::new(Thread { next: None }))).unwrap());
+    /// let [a, b, c] = [(); 3].map(|()| NonNull::new(Box::into_raw(Box::new(Thread { link: Link::new() }))).unwrap());
     /// let mut waiting: Queue<Thread> = Queue::new();
     /// // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
     /// unsafe { [a, b, c].map(|t| waiting.push_back(Unqueued::new(t))) };
@@ -325,7 +409,7 @@ impl<T: Node> Queue<T> {
             previous = Some(node);
             // SAFETY: every node between head and tail was pushed with a token and is still valid
             // (rule 2); we are the only accessor (rule 3).
-            cursor = unsafe { (*node.as_ptr()).next() };
+            cursor = unsafe { read_link(node) };
         }
         None
     }
@@ -334,7 +418,7 @@ impl<T: Node> Queue<T> {
     /// queue of their own. The nodes `filter` passes over stay, in their order.
     ///
     /// `filter` sees each node once, in queue order, as a pointer, so it can count as well as test.
-    /// Reading the node is the caller's `unsafe`; writing its link breaks the `Node` contract. If
+    /// Reading the node is the caller's `unsafe`; replacing its `Link` breaks rule 3. If
     /// `filter` panics, the nodes already picked are stranded, as a dropped queue strands its own.
     ///
     /// Unlike `Vec::extract_if`, which returns a lazy iterator borrowing the vector, this walks the
@@ -344,14 +428,16 @@ impl<T: Node> Queue<T> {
     ///
     /// ```
     /// # use core::ptr::NonNull;
-    /// # use intrusive_queue::{Queue, Node, Unqueued};
-    /// # struct Waiter { key: u32, next: Option<NonNull<Waiter>> }
+    /// # use intrusive_queue::{Link, Node, Queue, Unqueued};
+    /// # struct Waiter { key: u32, link: Link<Waiter> }
     /// # // SAFETY: plain field storage, which is the whole of the `Node` contract.
     /// # unsafe impl Node for Waiter {
-    /// #     fn next(&self) -> Option<NonNull<Self>> { self.next }
-    /// #     fn set_next(&mut self, next: Option<NonNull<Self>>) { self.next = next; }
+    /// #     unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
+    /// #         // SAFETY: `this` is a live node (the caller's promise); this projects to its field.
+    /// #         unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
+    /// #     }
     /// # }
-    /// let waiters = [7, 9, 7, 7].map(|key| NonNull::new(Box::into_raw(Box::new(Waiter { key, next: None }))).unwrap());
+    /// let waiters = [7, 9, 7, 7].map(|key| NonNull::new(Box::into_raw(Box::new(Waiter { key, link: Link::new() }))).unwrap());
     /// let mut bucket: Queue<Waiter> = Queue::new();
     /// // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
     /// unsafe { waiters.map(|w| bucket.push_back(Unqueued::new(w))) };
@@ -375,7 +461,7 @@ impl<T: Node> Queue<T> {
         while let Some(node) = cursor {
             // SAFETY: as in `remove`. The link is read before `node` can leave, because leaving
             // clears it.
-            cursor = unsafe { (*node.as_ptr()).next() };
+            cursor = unsafe { read_link(node) };
             if filter(node) {
                 // SAFETY: `node` is on this queue, and `previous` is the last node the walk kept,
                 // which is the node just before it.
@@ -397,15 +483,15 @@ impl<T: Node> Queue<T> {
         // SAFETY: both are on this queue (the caller's promise), so both are valid (rule 2), and
         // we are the only accessor (rule 3).
         unsafe {
-            let next = (*node.as_ptr()).next();
+            let next = read_link(node);
             match previous {
-                Some(previous) => (*previous.as_ptr()).set_next(next),
+                Some(previous) => write_link(previous, next),
                 None => self.head = next,
             }
             if next.is_none() {
                 self.tail = previous;
             }
-            (*node.as_ptr()).set_next(None);
+            write_link(node, None);
         }
         // Wrapping: `node` was on the queue, so `len >= 1`, as in `pop_front`.
         self.len = self.len.wrapping_sub(1);
@@ -423,15 +509,17 @@ impl<T: Node> Queue<T> {
     ///
     /// ```
     /// # use core::ptr::NonNull;
-    /// # use intrusive_queue::{Queue, Node, Unqueued};
-    /// # struct Thread { id: u32, next: Option<NonNull<Thread>> }
+    /// # use intrusive_queue::{Link, Node, Queue, Unqueued};
+    /// # struct Thread { id: u32, link: Link<Thread> }
     /// # // SAFETY: plain field storage, which is the whole of the `Node` contract.
     /// # unsafe impl Node for Thread {
-    /// #     fn next(&self) -> Option<NonNull<Self>> { self.next }
-    /// #     fn set_next(&mut self, next: Option<NonNull<Self>>) { self.next = next; }
+    /// #     unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
+    /// #         // SAFETY: `this` is a live node (the caller's promise); this projects to its field.
+    /// #         unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
+    /// #     }
     /// # }
-    /// let a = NonNull::new(Box::into_raw(Box::new(Thread { id: 1, next: None }))).unwrap();
-    /// let b = NonNull::new(Box::into_raw(Box::new(Thread { id: 2, next: None }))).unwrap();
+    /// let a = NonNull::new(Box::into_raw(Box::new(Thread { id: 1, link: Link::new() }))).unwrap();
+    /// let b = NonNull::new(Box::into_raw(Box::new(Thread { id: 2, link: Link::new() }))).unwrap();
     /// let mut ready: Queue<Thread> = Queue::new();
     /// // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
     /// let (token_a, token_b) = unsafe { (Unqueued::new(a), Unqueued::new(b)) };
@@ -466,7 +554,7 @@ impl<T: Node> Iterator for Iter<'_, T> {
         // SAFETY: every node between head and tail was pushed with a token and is still valid
         // (rule 2), and the borrow of the queue this walk holds means no push or pop links or
         // unlinks one while it runs; the caller writes no link outside the queue (rule 3).
-        self.next = unsafe { (*node.as_ptr()).next() };
+        self.next = unsafe { read_link(node) };
         Some(node)
     }
 }
@@ -494,22 +582,31 @@ impl<T> Default for Queue<T> {
 /// The one test node the host tests and the proof harnesses share.
 #[cfg(any(test, kani))]
 mod test_support {
-    use super::{Node, NonNull};
+    use super::{Link, Node, NonNull};
 
     /// A node whose `tag` says which one it is.
     pub(crate) struct N {
-        pub(crate) next: Option<NonNull<N>>,
+        pub(crate) link: Link<N>,
         pub(crate) tag: usize,
     }
 
-    // SAFETY: `next` and `set_next` are plain field storage and touch nothing else, which is the
-    // whole of the `Node` contract.
-    unsafe impl Node for N {
-        fn next(&self) -> Option<NonNull<Self>> {
-            self.next
+    impl N {
+        /// A node with `tag`, on no queue.
+        pub(crate) fn new(tag: usize) -> Self {
+            Self {
+                link: Link::new(),
+                tag,
+            }
         }
-        fn set_next(&mut self, next: Option<NonNull<Self>>) {
-            self.next = next;
+    }
+
+    // SAFETY: `link` projects to the `link` field by `&raw mut`, forms no reference and does
+    // nothing else, which is the whole of the `Node` contract.
+    unsafe impl Node for N {
+        unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
+            // SAFETY: `this` is a live node (the caller's promise), and a field of a non-null
+            // pointer to a live value is non-null.
+            unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
         }
     }
 }
@@ -530,11 +627,7 @@ mod verification {
     /// link (which Kani would report as an invalid pointer access).
     #[kani::proof]
     fn any_push_pop_interleaving_is_first_in_first_out_and_lossless() {
-        let mut nodes = [
-            N { next: None, tag: 0 },
-            N { next: None, tag: 1 },
-            N { next: None, tag: 2 },
-        ];
+        let mut nodes = [N::new(0), N::new(1), N::new(2)];
         // One token per node, minted from one pointer to the array, the way a kernel mints
         // from the pointer its table stores. `nodes` is not named again, so every later access
         // goes through a token. A token is in `held` while its node is off the queue.
@@ -595,11 +688,7 @@ mod verification {
     #[kani::proof]
     #[kani::unwind(4)]
     fn a_popped_node_leaves_with_a_clear_link() {
-        let mut nodes = [
-            N { next: None, tag: 0 },
-            N { next: None, tag: 1 },
-            N { next: None, tag: 2 },
-        ];
+        let mut nodes = [N::new(0), N::new(1), N::new(2)];
         let base = (&raw mut nodes).cast::<N>();
         let mut q: Queue<N> = Queue::new();
         let count: usize = kani::any();
@@ -611,12 +700,12 @@ mod verification {
         }
         let token = q.pop_front().expect("lost a node");
         // SAFETY: pop returns only nodes we pushed, all still valid.
-        assert!(unsafe { (*token.as_ptr()).next() }.is_none());
+        assert!(unsafe { read_link(token.as_non_null()) }.is_none());
     }
 
     /// Four nodes for the removal harnesses, the last never queued before the call under proof.
     fn four_nodes() -> [N; 4] {
-        [0, 1, 2, 3].map(|tag| N { next: None, tag })
+        [0, 1, 2, 3].map(N::new)
     }
 
     /// Falsification: replayable `falsifications/verification.removing_any_node_keeps_the_rest_in_order.patch`
@@ -646,7 +735,7 @@ mod verification {
             // SAFETY: a node of the array, just taken off the queue.
             assert!(token.as_ptr() == unsafe { base.add(victim) });
             // SAFETY: as above.
-            assert!(unsafe { (*token.as_ptr()).next() }.is_none());
+            assert!(unsafe { read_link(token.as_non_null()) }.is_none());
         }
         assert_eq!(q.len(), count - usize::from(was_queued));
         // SAFETY: node 3 was never pushed and has no token yet.
@@ -698,7 +787,8 @@ mod verification {
             let mut expect = (0..count).filter(|&i| picked[i] == keep);
             while let Some(token) = queue.pop_front() {
                 // SAFETY: pop returns only nodes we pushed, all still valid.
-                let (tag, next) = unsafe { ((*token.as_ptr()).tag, (*token.as_ptr()).next()) };
+                let (tag, next) =
+                    unsafe { ((*token.as_ptr()).tag, read_link(token.as_non_null())) };
                 assert!(next.is_none());
                 if tag != 3 {
                     assert_eq!(Some(tag), expect.next(), "a node out of order or invented");
@@ -747,7 +837,7 @@ mod tests {
     }
 
     fn node(tag: usize) -> Owned {
-        Owned(NonNull::new(Box::into_raw(Box::new(N { next: None, tag }))).unwrap())
+        Owned(NonNull::new(Box::into_raw(Box::new(N::new(tag)))).unwrap())
     }
 
     /// Mint `n`'s token from its owning pointer. Every test calls this once per node, declared
@@ -894,7 +984,7 @@ mod tests {
         q.push_back(token(&mut b));
         let p = q.pop_front().unwrap();
         // SAFETY: `p` was just popped, so it is live and unlinked; that it is unlinked is what this test asserts.
-        assert!(unsafe { (*p.as_ptr()).next() }.is_none());
+        assert!(unsafe { read_link(p.as_non_null()) }.is_none());
     }
 
     /// Drain `q` into its nodes' tags, oldest first.
@@ -920,7 +1010,7 @@ mod tests {
             if let Some(t) = &removed {
                 assert!(*t == pointers[victim]);
                 // SAFETY: just taken off the queue, and its node is live.
-                assert!(unsafe { (*t.as_ptr()).next() }.is_none());
+                assert!(unsafe { read_link(t.as_non_null()) }.is_none());
             }
             assert_eq!(q.len(), if victim < 3 { 2 } else { 3 });
             q.push_back(token(&mut nodes[4]));
@@ -965,7 +1055,7 @@ mod tests {
             let mut popped = Vec::new();
             while let Some(t) = taken.pop_front() {
                 // SAFETY: popped from the test's own queue, so live.
-                assert!(unsafe { (*t.as_ptr()).next() }.is_none());
+                assert!(unsafe { read_link(t.as_non_null()) }.is_none());
                 popped.push(tag(&t));
             }
             assert_eq!(popped, picked.into_iter().chain([3]).collect::<Vec<_>>());
@@ -974,6 +1064,26 @@ mod tests {
                 kept.into_iter().chain([4]).collect::<Vec<_>>()
             );
         }
+    }
+
+    /// **The queue retags no node.** It writes a link through the node's projection, into the
+    /// link's `UnsafeCell`, so a shared reference to the whole node, or to a field of it, stays
+    /// valid across a push that writes that node's link. Rule 3 still forbids holding one for
+    /// now; this test is what keeps a later release free to narrow rule 3 to the link alone. Run
+    /// it under Miri with either borrow model: both pass it. Under a trait whose method took the
+    /// node by `&mut`, Stacked Borrows reports the held reference as invalidated by that call.
+    #[test]
+    fn a_shared_reference_to_a_queued_node_survives_a_push() {
+        let (mut a, mut b) = (node(1), node(2));
+        let mut q: Queue<N> = Queue::new();
+        q.push_back(token(&mut a));
+        // SAFETY: `a` is live until its `Owned` drops at the end of the test.
+        let whole: &N = unsafe { a.0.as_ref() };
+        let tag_of_a: &usize = &whole.tag;
+        // This push writes `a`'s link, since `a` is the tail.
+        q.push_back(token(&mut b));
+        assert_eq!((whole.tag, *tag_of_a), (1, 1));
+        assert_eq!(drain(&mut q), vec![1, 2]);
     }
 
     /// **A token minted from the owning pointer survives the owner's later reborrows.** The
@@ -998,7 +1108,7 @@ mod tests {
 
         let mut table = Table(
             (1..=2)
-                .map(|tag| NonNull::new(Box::into_raw(Box::new(N { next: None, tag }))).unwrap())
+                .map(|tag| NonNull::new(Box::into_raw(Box::new(N::new(tag)))).unwrap())
                 .collect(),
         );
         // SAFETY: two live nodes on no queue, each minted once from the pointer the table

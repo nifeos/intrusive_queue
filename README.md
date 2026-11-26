@@ -20,26 +20,25 @@ A run queue: threads leave in the order they arrived.
 
 ```rust
 use core::ptr::NonNull;
-use intrusive_queue::{Node, Queue, Unqueued};
+use intrusive_queue::{Link, Node, Queue, Unqueued};
 
 struct Thread {
     id: u32,
-    next: Option<NonNull<Thread>>,
+    link: Link<Thread>,
 }
 
-// SAFETY: `next` and `set_next` are plain field storage and touch nothing else, which is the whole
-// of the `Node` contract.
+// SAFETY: `link` projects to the `link` field by `&raw mut`, forms no reference and does nothing
+// else, which is the whole of the `Node` contract.
 unsafe impl Node for Thread {
-    fn next(&self) -> Option<NonNull<Self>> {
-        self.next
-    }
-    fn set_next(&mut self, next: Option<NonNull<Self>>) {
-        self.next = next;
+    unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
+        // SAFETY: `this` is a live node (the caller's promise), and a field of a non-null pointer
+        // to a live value is non-null.
+        unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
     }
 }
 
-let a = NonNull::new(Box::into_raw(Box::new(Thread { id: 1, next: None }))).unwrap();
-let b = NonNull::new(Box::into_raw(Box::new(Thread { id: 2, next: None }))).unwrap();
+let a = NonNull::new(Box::into_raw(Box::new(Thread { id: 1, link: Link::new() }))).unwrap();
+let b = NonNull::new(Box::into_raw(Box::new(Thread { id: 2, link: Link::new() }))).unwrap();
 let mut ready: Queue<Thread> = Queue::new();
 // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
 let (token_a, token_b) = unsafe { (Unqueued::new(a), Unqueued::new(b)) };
@@ -78,7 +77,10 @@ aliasing side through the tests, and the repository's weekly workflow runs it.
 
 ## The caller's contract
 
-A node implements `Node`, an `unsafe` trait whose two methods read and store its link. One `unsafe`
+A node carries a `Link` field and implements `Node`, an `unsafe` trait whose one method projects
+from a pointer to the node to that field. The link keeps its pointer in an `UnsafeCell` behind a
+private field, so the queue writes it without forming a reference to the rest of the node, and no
+caller can write it at all. One `unsafe`
 call, `Unqueued::new`, mints a node into an `Unqueued` token. `Queue::push_back` consumes the
 token and `Queue::pop_front` hands it back, as do `Queue::remove`, which takes one node from
 anywhere in the queue, and `Queue::extract_if`, which takes every node a filter picks.
@@ -160,7 +162,7 @@ patch -R -p1 --no-backup-if-mismatch < falsifications/verification.a_popped_node
 ```
 
 The failing run prints
-`Failed Checks: assertion failed: unsafe { (*token.as_ptr()).next() }.is_none()` and
+`Failed Checks: assertion failed: unsafe { read_link(token.as_non_null()) }.is_none()` and
 `VERIFICATION:- FAILED`. It ends with
 `Complete - 0 successfully verified harnesses, 1 failures, 1 total.`, and `cargo kani` exits 1. Each patch's opening lines name the
 check it expects to fail.

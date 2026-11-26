@@ -1246,6 +1246,19 @@ mod tests {
         }
     }
 
+    /// A link prints its name and no pointer, on and off a queue, so a node's derived `Debug` never
+    /// reads a link the queue may be writing.
+    #[test]
+    fn a_link_prints_no_pointer() {
+        let (mut a, mut b) = (node(1), node(2));
+        assert_eq!(format!("{:?}", Link::<N>::default()), "Link { .. }");
+        let mut q: Queue<N> = Queue::new();
+        q.push_back(token(&mut a));
+        q.push_back(token(&mut b));
+        assert_eq!(format!("{:?}", a.link), "Link { .. }");
+        assert_eq!(drain(&mut q), vec![1, 2]);
+    }
+
     /// A queue of `Sync` nodes is `Sync`: two threads may walk one shared queue at once.
     #[test]
     fn a_shared_queue_walks_from_two_threads() {

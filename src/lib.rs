@@ -299,6 +299,13 @@ impl<T> Queue<T> {
     pub fn len(&self) -> usize {
         self.len
     }
+
+    /// The oldest node, as a pointer, left on the queue: the one the next
+    /// [`pop_front`](Queue::pop_front) would take. Dereferencing it is the caller's `unsafe`, as
+    /// for a pointer [`iter`](Queue::iter) yields.
+    pub fn front(&self) -> Option<NonNull<T>> {
+        self.head
+    }
 }
 
 impl<T: Node> Queue<T> {
@@ -342,6 +349,59 @@ impl<T: Node> Queue<T> {
         // path every push takes. `len` counts distinct live linked nodes of nonzero size, so it
         // never reaches `usize::MAX`, and that check could never fire.
         self.len = self.len.wrapping_add(1);
+    }
+
+    /// Move every node of `other` to the back of this queue, keeping their order, and leave
+    /// `other` empty. O(1): it writes the one link that joins the two, whatever their lengths.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use core::ptr::NonNull;
+    /// # use intrusive_queue::{Link, Node, Queue, Unqueued};
+    /// # struct Thread { id: u32, link: Link<Thread> }
+    /// # // SAFETY: a projection to the link field, which is the whole of the `Node` contract.
+    /// # unsafe impl Node for Thread {
+    /// #     unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
+    /// #         // SAFETY: `this` is a live node (the caller's promise); this projects to its field.
+    /// #         unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
+    /// #     }
+    /// # }
+    /// let [a, b, c] = [1, 2, 3].map(|id| Box::into_raw(Box::new(Thread { id, link: Link::new() })));
+    /// let [a, b, c] = [a, b, c].map(|p| NonNull::new(p).ok_or("null box"));
+    /// let (a, b, c) = (a?, b?, c?);
+    /// // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
+    /// let mut ready: Queue<Thread> = unsafe { [Unqueued::new(a)] }.into_iter().collect();
+    /// // SAFETY: as above.
+    /// let mut woken: Queue<Thread> = unsafe { [Unqueued::new(b), Unqueued::new(c)] }.into_iter().collect();
+    ///
+    /// // The threads a wake-up made runnable join the run queue behind those already there.
+    /// ready.append(&mut woken);
+    /// assert!(woken.is_empty() && ready.len() == 3);
+    /// // SAFETY: the front is one of the live boxed nodes, read between queue operations.
+    /// assert_eq!(unsafe { ready.front().ok_or("empty")?.as_ref() }.id, 1);
+    /// while ready.pop_front().is_some() {}
+    /// // SAFETY: all three came from `Box::into_raw`, and both queues are empty.
+    /// unsafe { [a, b, c].map(|t| drop(Box::from_raw(t.as_ptr()))) };
+    /// # Ok::<(), &str>(())
+    /// ```
+    pub fn append(&mut self, other: &mut Queue<T>) {
+        let Some(other_head) = other.head else {
+            return;
+        };
+        match self.tail {
+            // SAFETY: `tail` was pushed with its token and not yet popped, so it is valid, and we
+            // are the only accessor (rule 3).
+            Some(tail) => unsafe { write_link(tail, Some(other_head)) },
+            None => self.head = Some(other_head),
+        }
+        self.tail = other.tail;
+        // Wrapping: the two counts are of distinct live nodes, so their sum is a count of distinct
+        // live nodes too, which never reaches `usize::MAX`, as in `push_back`.
+        self.len = self.len.wrapping_add(other.len);
+        other.head = None;
+        other.tail = None;
+        other.len = 0;
     }
 
     /// Detach and return the oldest node, with its token. The returned node's link is cleared: it
@@ -813,6 +873,48 @@ mod verification {
         assert!(q.is_empty());
     }
 
+    /// Falsification: replayable `falsifications/verification.appending_joins_two_queues_in_order.patch`
+    /// Appending a queue of up to two nodes to another of up to two leaves every node on the first,
+    /// its own first and the appended ones after, in order, and the second empty; a node pushed
+    /// onto either afterwards comes out of that one alone.
+    #[kani::proof]
+    #[kani::unwind(6)]
+    fn appending_joins_two_queues_in_order() {
+        let mut nodes = [0, 1, 2, 3, 4].map(N::new);
+        let base = (&raw mut nodes).cast::<N>();
+        let (mut q, mut r): (Queue<N>, Queue<N>) = (Queue::new(), Queue::new());
+        let (in_q, in_r): (usize, usize) = (kani::any(), kani::any());
+        kani::assume(in_q <= 2 && in_r <= 2);
+        for i in 0..in_q {
+            // SAFETY: a distinct live element of a local declared before the queues, on no
+            // queue, minted once from the array's own pointer, and the harness is the only
+            // accessor.
+            q.push_back(unsafe { Unqueued::new(NonNull::new_unchecked(base.add(i))) });
+        }
+        for i in 2..2 + in_r {
+            // SAFETY: as above.
+            r.push_back(unsafe { Unqueued::new(NonNull::new_unchecked(base.add(i))) });
+        }
+        q.append(&mut r);
+        assert_eq!((q.len(), r.len()), (in_q + in_r, 0));
+        assert!(r.is_empty() && r.front().is_none());
+        let onto_r: bool = kani::any();
+        let target = if onto_r { &mut r } else { &mut q };
+        // SAFETY: node 4 was never pushed and has no token yet.
+        target.push_back(unsafe { Unqueued::new(NonNull::new_unchecked(base.add(4))) });
+        let mut expect = (0..in_q)
+            .chain(2..2 + in_r)
+            .chain(if onto_r { None } else { Some(4) });
+        while let Some(token) = q.pop_front() {
+            // SAFETY: pop returns only nodes we pushed, all still valid.
+            assert_eq!(Some(unsafe { (*token.as_ptr()).tag }), expect.next());
+        }
+        assert!(expect.next().is_none(), "lost a node");
+        let tail_of_r = r.pop_front();
+        assert_eq!(tail_of_r.is_some(), onto_r);
+        assert!(r.is_empty());
+    }
+
     /// Falsification: replayable `falsifications/verification.extract_if_splits_the_queue_in_order.patch`
     /// `extract_if` with a filter that picks any subset of up to three nodes shows the filter each
     /// node once in queue order, hands the picked ones back in that order, keeps the rest in
@@ -1086,6 +1188,29 @@ mod tests {
         }
         assert_eq!(walked, nodes.iter().map(|n| n.0).collect::<Vec<_>>());
         assert_eq!(drain(&mut q), vec![0, 1, 2, 3]);
+    }
+
+    /// `front` names the next node a pop takes; `append` joins two queues in order, empty or not,
+    /// leaves the second empty, and both tails take a later push.
+    #[test]
+    fn front_and_append() {
+        for (in_q, in_r) in [(0, 0), (0, 2), (2, 0), (2, 2)] {
+            let mut nodes: Vec<Owned> = (0..6).map(node).collect();
+            let mut tokens: Vec<Unqueued<N>> = nodes.iter_mut().map(token).collect();
+            let (extra_r, extra_q) = (tokens.pop().unwrap(), tokens.pop().unwrap());
+            let mut r: Queue<N> = tokens.drain(2..2 + in_r).collect();
+            let mut q: Queue<N> = tokens.drain(..in_q).collect();
+            assert_eq!(q.front(), (in_q > 0).then(|| nodes[0].0));
+            q.append(&mut r);
+            assert_eq!((q.len(), r.len(), r.front()), (in_q + in_r, 0, None));
+            let first = if in_q > 0 { 0 } else { 2 };
+            assert_eq!(q.front(), (in_q + in_r > 0).then(|| nodes[first].0));
+            q.push_back(extra_q);
+            r.push_back(extra_r);
+            let expect: Vec<usize> = (0..in_q).chain(2..2 + in_r).chain([4]).collect();
+            assert_eq!(drain(&mut q), expect);
+            assert_eq!(drain(&mut r), vec![5]);
+        }
     }
 
     /// A popped node leaves with a clean link: it does not secretly point back into the queue.

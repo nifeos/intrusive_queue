@@ -10,7 +10,7 @@ cannot allocate or fail, and a pop hands back the node itself. The queue is two 
 count, and it owns none of its nodes. That makes a push legal where allocation is not, such as an
 interrupt handler or a scheduler's run queue.
 
-The crate is `no_std`, has no dependencies, and is dual licensed `MIT OR Apache-2.0`. Four Kani
+The crate is `no_std`, has no dependencies, and is dual licensed `MIT OR Apache-2.0`. Five Kani
 harnesses prove its list logic, and each carries a falsification patch that shows what turns it
 red.
 
@@ -58,7 +58,7 @@ unsafe { drop((Box::from_raw(a.as_ptr()), Box::from_raw(b.as_ptr()))) };
 
 ## What is proven
 
-Four Kani harnesses in `src/lib.rs` drive the real `Queue` against a model of an array and two
+Five Kani harnesses in `src/lib.rs` drive the real `Queue` against a model of an array and two
 counters:
 
 - Any interleaving of pushes and pops is first in, first out and lossless. Over six symbolic steps
@@ -70,6 +70,8 @@ counters:
 - `extract_if` with any choice of nodes from a queue of up to three shows the filter each node once
   in order, splits the queue into the picked and the kept with both in order, and leaves both
   tails right.
+- `append` of a queue of up to two nodes to another of up to two leaves every node on the first in
+  order and the second empty, and a later push onto either comes out of that one alone.
 
 The harnesses cover the list logic. They do not cover the caller's contract: no proof here shows
 that a caller kept a node alive or minted its token from the owning pointer. Miri covers the
@@ -83,7 +85,8 @@ private field, so the queue writes it without forming a reference to the rest of
 caller can write it at all. One `unsafe`
 call, `Unqueued::new`, mints a node into an `Unqueued` token. `Queue::push_back` consumes the
 token and `Queue::pop_front` hands it back, as do `Queue::remove`, which takes one node from
-anywhere in the queue, and `Queue::extract_if`, which takes every node a filter picks.
+anywhere in the queue, and `Queue::extract_if`, which takes every node a filter picks. `Queue::append` moves every node of
+one queue to the back of another, and `Queue::front` names the oldest node without taking it.
 `Queue::iter` walks the queued nodes oldest first and yields each as a `NonNull`, which the caller
 dereferences under the same rules. The token is neither `Clone` nor `Copy`, so a second
 push of the same node does not compile without a second `unsafe` mint.
@@ -136,7 +139,7 @@ the Rust toolchain Kani pins, so it needs network access. Then run every harness
 cargo kani
 ```
 
-The four harnesses take about two and a half minutes and peak near 1.3 gigabytes of memory, as
+The five harnesses take about two and a half minutes and peak near 1.3 gigabytes of memory, as
 `/usr/bin/time -v cargo kani` measured on a shared 80-core x86_64 host. The `extract_if` harness
 takes most of that, about 100 seconds. To run one harness, give
 its full path, because `--exact` refuses a bare name:
@@ -147,7 +150,7 @@ cargo kani --harness verification::a_popped_node_leaves_with_a_clear_link --exac
 
 A passing run prints lines that look alarming and mean nothing. They are the `use of an unstable
 feature` warning, and many `aborting path on assume(false)` lines, which are paths Kani discards on
-purpose. The answer is the last line, `Complete - 4 successfully verified harnesses, 0 failures, 4
+purpose. The answer is the last line, `Complete - 5 successfully verified harnesses, 0 failures, 5
 total.`, and `cargo kani` exits 0.
 
 ### Running one falsification patch

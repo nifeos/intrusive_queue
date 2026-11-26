@@ -14,7 +14,7 @@ thread that never runs again.
 diff --git a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -353,9 +353,6 @@
+@@ -413,9 +413,6 @@
          // (rule 2, the token's minting contract); we are the only accessor (rule 3).
          unsafe {
              self.head = read_link(node);

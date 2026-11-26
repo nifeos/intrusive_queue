@@ -11,7 +11,7 @@ the filter picks a node that has another node behind it.
 diff --git a/src/lib.rs b/src/lib.rs
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -461,7 +461,6 @@
+@@ -521,7 +521,6 @@
          while let Some(node) = cursor {
              // SAFETY: as in `remove`. The link is read before `node` can leave, because leaving
              // clears it.
@@ -19,7 +19,7 @@ diff --git a/src/lib.rs b/src/lib.rs
              if filter(node) {
                  // SAFETY: `node` is on this queue, and `previous` is the last node the walk kept,
                  // which is the node just before it.
-@@ -469,6 +468,7 @@
+@@ -529,6 +528,7 @@
              } else {
                  previous = Some(node);
              }

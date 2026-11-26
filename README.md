@@ -142,10 +142,9 @@ the Rust toolchain Kani pins, so it needs network access. Then run every harness
 cargo kani
 ```
 
-The five harnesses take about two and a half minutes and peak near 1.3 gigabytes of memory, as
-`/usr/bin/time -v cargo kani` measured on a shared 80-core x86_64 host. The `extract_if` harness
-takes most of that, about 100 seconds. To run one harness, give
-its full path, because `--exact` refuses a bare name:
+The five harnesses take about two minutes of wall time (111 seconds) and peak near 1.2 gigabytes
+of memory, as `/usr/bin/time` measured `cargo kani` on a Linux x86_64 host with other work running.
+To run one harness, give its full path, because `--exact` refuses a bare name:
 
 ```sh
 cargo kani --harness verification::a_popped_node_leaves_with_a_clear_link --exact

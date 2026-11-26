@@ -37,15 +37,15 @@ unsafe impl Node for Thread {
     }
 }
 
-let a = NonNull::new(Box::into_raw(Box::new(Thread { id: 1, link: Link::new() }))).unwrap();
-let b = NonNull::new(Box::into_raw(Box::new(Thread { id: 2, link: Link::new() }))).unwrap();
+let a = NonNull::new(Box::into_raw(Box::new(Thread { id: 1, link: Link::new() }))).ok_or("null box")?;
+let b = NonNull::new(Box::into_raw(Box::new(Thread { id: 2, link: Link::new() }))).ok_or("null box")?;
 let mut ready: Queue<Thread> = Queue::new();
 // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
 let (token_a, token_b) = unsafe { (Unqueued::new(a), Unqueued::new(b)) };
 ready.push_back(token_a);
 ready.push_back(token_b);
 
-let first = ready.pop_front().unwrap();
+let first = ready.pop_front().ok_or("empty queue")?;
 ready.push_back(first);
 let order: Vec<u32> = core::iter::from_fn(|| ready.pop_front())
     // SAFETY: each token names one of the two live boxed nodes.
@@ -54,6 +54,7 @@ let order: Vec<u32> = core::iter::from_fn(|| ready.pop_front())
 assert_eq!(order, vec![2, 1]);
 // SAFETY: both came from `Box::into_raw`, and the queue is empty, so nothing reaches them.
 unsafe { drop((Box::from_raw(a.as_ptr()), Box::from_raw(b.as_ptr()))) };
+# Ok::<(), &str>(())
 ```
 
 ## What is proven

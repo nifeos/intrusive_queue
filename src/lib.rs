@@ -221,15 +221,15 @@ impl<T> core::fmt::Debug for Unqueued<T> {
 /// # use core::ptr::NonNull;
 /// # use intrusive_queue::{Link, Node, Queue, Unqueued};
 /// # struct Thread { tid: u32, link: Link<Thread> }
-/// # // SAFETY: plain field storage, which is the whole of the `Node` contract.
+/// # // SAFETY: a projection to the link field, which is the whole of the `Node` contract.
 /// # unsafe impl Node for Thread {
 /// #     unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
 /// #         // SAFETY: `this` is a live node (the caller's promise); this projects to its field.
 /// #         unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
 /// #     }
 /// # }
-/// let a = NonNull::new(Box::into_raw(Box::new(Thread { tid: 1, link: Link::new() }))).unwrap();
-/// let b = NonNull::new(Box::into_raw(Box::new(Thread { tid: 2, link: Link::new() }))).unwrap();
+/// let a = NonNull::new(Box::into_raw(Box::new(Thread { tid: 1, link: Link::new() }))).ok_or("null box")?;
+/// let b = NonNull::new(Box::into_raw(Box::new(Thread { tid: 2, link: Link::new() }))).ok_or("null box")?;
 /// let mut q: Queue<Thread> = Queue::new();
 /// // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
 /// let (ta, tb) = unsafe { (Unqueued::new(a), Unqueued::new(b)) };
@@ -238,7 +238,7 @@ impl<T> core::fmt::Debug for Unqueued<T> {
 /// assert_eq!(q.len(), 2);
 ///
 /// // Drained then refilled: where the classic tail-pointer bug lives.
-/// let first = q.pop_front().unwrap();
+/// let first = q.pop_front().ok_or("empty queue")?;
 /// q.push_back(first);
 /// let order: Vec<u32> = core::iter::from_fn(|| q.pop_front())
 ///     // SAFETY: each token's node is one of the live locals above.
@@ -247,6 +247,7 @@ impl<T> core::fmt::Debug for Unqueued<T> {
 /// assert_eq!(order, vec![2, 1]);
 /// // SAFETY: both came from `Box::into_raw`, and `q` is empty, so nothing reaches them (rule 2).
 /// unsafe { drop((Box::from_raw(a.as_ptr()), Box::from_raw(b.as_ptr()))) };
+/// # Ok::<(), &str>(())
 /// ```
 #[doc(alias = "fifo")]
 pub struct Queue<T> {
@@ -265,7 +266,7 @@ pub struct Queue<T> {
 /// # use std::rc::Rc;
 /// # use intrusive_queue::{Link, Node, Queue};
 /// struct Logged { log: Rc<u32>, link: Link<Logged> }
-/// // SAFETY: plain field storage, which is the whole of the `Node` contract.
+/// // SAFETY: a projection to the link field, which is the whole of the `Node` contract.
 /// unsafe impl Node for Logged {
 ///     unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
 ///         // SAFETY: `this` is a live node (the caller's promise); this projects to its field.
@@ -357,9 +358,10 @@ impl<T: Node> Queue<T> {
     /// # let mut b = T { link: Link::new() };
     /// # let (mut ready, mut inbox) = (Queue::<T>::new(), Queue::<T>::new());
     /// // SAFETY: `b` is live, on no queue, has no token yet, and is not named again.
-    /// let token = unsafe { Unqueued::new(NonNull::new(&raw mut b).unwrap()) };
+    /// let token = unsafe { Unqueued::new(NonNull::new(&raw mut b).ok_or("null local")?) };
     /// ready.push_back(token);
     /// inbox.push_back(token); // error[E0382]: use of moved value: `token`
+    /// # Ok::<(), &str>(())
     /// ```
     pub fn push_back(&mut self, node: Unqueued<T>) {
         let node = node.0;
@@ -395,9 +397,9 @@ impl<T: Node> Queue<T> {
     /// #         unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
     /// #     }
     /// # }
-    /// let [a, b, c] = [1, 2, 3].map(|id| Box::into_raw(Box::new(Thread { id, link: Link::new() })));
-    /// let [a, b, c] = [a, b, c].map(|p| NonNull::new(p).ok_or("null box"));
-    /// let (a, b, c) = (a?, b?, c?);
+    /// let a = NonNull::new(Box::into_raw(Box::new(Thread { id: 1, link: Link::new() }))).ok_or("null box")?;
+    /// let b = NonNull::new(Box::into_raw(Box::new(Thread { id: 2, link: Link::new() }))).ok_or("null box")?;
+    /// let c = NonNull::new(Box::into_raw(Box::new(Thread { id: 3, link: Link::new() }))).ok_or("null box")?;
     /// // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
     /// let mut ready: Queue<Thread> = unsafe { [Unqueued::new(a)] }.into_iter().collect();
     /// // SAFETY: as above.
@@ -465,17 +467,18 @@ impl<T: Node> Queue<T> {
     /// # use core::ptr::NonNull;
     /// # use intrusive_queue::{Link, Node, Queue, Unqueued};
     /// # struct Thread { link: Link<Thread> }
-    /// # // SAFETY: plain field storage, which is the whole of the `Node` contract.
+    /// # // SAFETY: a projection to the link field, which is the whole of the `Node` contract.
     /// # unsafe impl Node for Thread {
     /// #     unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
     /// #         // SAFETY: `this` is a live node (the caller's promise); this projects to its field.
     /// #         unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
     /// #     }
     /// # }
-    /// let [a, b, c] = [(); 3].map(|()| NonNull::new(Box::into_raw(Box::new(Thread { link: Link::new() }))).unwrap());
-    /// let mut waiting: Queue<Thread> = Queue::new();
+    /// let a = NonNull::new(Box::into_raw(Box::new(Thread { link: Link::new() }))).ok_or("null box")?;
+    /// let b = NonNull::new(Box::into_raw(Box::new(Thread { link: Link::new() }))).ok_or("null box")?;
+    /// let c = NonNull::new(Box::into_raw(Box::new(Thread { link: Link::new() }))).ok_or("null box")?;
     /// // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
-    /// unsafe { [a, b, c].map(|t| waiting.push_back(Unqueued::new(t))) };
+    /// let mut waiting: Queue<Thread> = unsafe { [a, b, c].map(|t| Unqueued::new(t)) }.into_iter().collect();
     ///
     /// // A thread whose wait ends early leaves from the middle.
     /// assert!(waiting.remove(b).is_some_and(|token| token == b));
@@ -484,6 +487,7 @@ impl<T: Node> Queue<T> {
     /// assert!(waiting.pop_front().is_some_and(|token| token == c));
     /// // SAFETY: all three came from `Box::into_raw`, and the queue is empty.
     /// unsafe { [a, b, c].map(|t| drop(Box::from_raw(t.as_ptr()))) };
+    /// # Ok::<(), &str>(())
     /// ```
     pub fn remove(&mut self, victim: NonNull<T>) -> Option<Unqueued<T>> {
         let mut previous = None;
@@ -518,17 +522,20 @@ impl<T: Node> Queue<T> {
     /// # use core::ptr::NonNull;
     /// # use intrusive_queue::{Link, Node, Queue, Unqueued};
     /// # struct Waiter { key: u32, link: Link<Waiter> }
-    /// # // SAFETY: plain field storage, which is the whole of the `Node` contract.
+    /// # // SAFETY: a projection to the link field, which is the whole of the `Node` contract.
     /// # unsafe impl Node for Waiter {
     /// #     unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
     /// #         // SAFETY: `this` is a live node (the caller's promise); this projects to its field.
     /// #         unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
     /// #     }
     /// # }
-    /// let waiters = [7, 9, 7, 7].map(|key| NonNull::new(Box::into_raw(Box::new(Waiter { key, link: Link::new() }))).unwrap());
-    /// let mut bucket: Queue<Waiter> = Queue::new();
+    /// let waiters: Vec<NonNull<Waiter>> = [7, 9, 7, 7]
+    ///     .map(|key| NonNull::new(Box::into_raw(Box::new(Waiter { key, link: Link::new() }))))
+    ///     .into_iter()
+    ///     .collect::<Option<_>>()
+    ///     .ok_or("null box")?;
     /// // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
-    /// unsafe { waiters.map(|w| bucket.push_back(Unqueued::new(w))) };
+    /// let mut bucket: Queue<Waiter> = waiters.iter().map(|&w| unsafe { Unqueued::new(w) }).collect();
     ///
     /// // Wake at most two of the waiters under key 7, first parked first.
     /// let mut left = 2;
@@ -539,8 +546,11 @@ impl<T: Node> Queue<T> {
     /// assert!(woken.is_empty());
     /// assert!(bucket.pop_front().is_some_and(|t| t == waiters[1]));
     /// assert!(bucket.pop_front().is_some_and(|t| t == waiters[3]));
-    /// // SAFETY: all four came from `Box::into_raw`, and both queues are empty.
-    /// unsafe { waiters.map(|w| drop(Box::from_raw(w.as_ptr()))) };
+    /// for w in waiters {
+    ///     // SAFETY: each came from `Box::into_raw`, and both queues are empty.
+    ///     unsafe { drop(Box::from_raw(w.as_ptr())) };
+    /// }
+    /// # Ok::<(), &str>(())
     /// ```
     pub fn extract_if(&mut self, mut filter: impl FnMut(NonNull<T>) -> bool) -> Queue<T> {
         let mut extracted = Queue::new();
@@ -599,15 +609,15 @@ impl<T: Node> Queue<T> {
     /// # use core::ptr::NonNull;
     /// # use intrusive_queue::{Link, Node, Queue, Unqueued};
     /// # struct Thread { id: u32, link: Link<Thread> }
-    /// # // SAFETY: plain field storage, which is the whole of the `Node` contract.
+    /// # // SAFETY: a projection to the link field, which is the whole of the `Node` contract.
     /// # unsafe impl Node for Thread {
     /// #     unsafe fn link(this: NonNull<Self>) -> NonNull<Link<Self>> {
     /// #         // SAFETY: `this` is a live node (the caller's promise); this projects to its field.
     /// #         unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
     /// #     }
     /// # }
-    /// let a = NonNull::new(Box::into_raw(Box::new(Thread { id: 1, link: Link::new() }))).unwrap();
-    /// let b = NonNull::new(Box::into_raw(Box::new(Thread { id: 2, link: Link::new() }))).unwrap();
+    /// let a = NonNull::new(Box::into_raw(Box::new(Thread { id: 1, link: Link::new() }))).ok_or("null box")?;
+    /// let b = NonNull::new(Box::into_raw(Box::new(Thread { id: 2, link: Link::new() }))).ok_or("null box")?;
     /// let mut ready: Queue<Thread> = Queue::new();
     /// // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
     /// let (token_a, token_b) = unsafe { (Unqueued::new(a), Unqueued::new(b)) };
@@ -619,6 +629,7 @@ impl<T: Node> Queue<T> {
     /// while ready.pop_front().is_some() {}
     /// // SAFETY: both came from `Box::into_raw`, and the queue is empty, so nothing reaches them.
     /// unsafe { drop((Box::from_raw(a.as_ptr()), Box::from_raw(b.as_ptr()))) };
+    /// # Ok::<(), &str>(())
     /// ```
     pub fn iter(&self) -> Iter<'_, T> {
         Iter {

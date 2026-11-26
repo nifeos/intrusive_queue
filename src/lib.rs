@@ -232,9 +232,7 @@ impl<T> core::fmt::Debug for Unqueued<T> {
 /// let b = NonNull::new(Box::into_raw(Box::new(Thread { tid: 2, link: Link::new() }))).ok_or("null box")?;
 /// let mut q: Queue<Thread> = Queue::new();
 /// // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
-/// let (ta, tb) = unsafe { (Unqueued::new(a), Unqueued::new(b)) };
-/// q.push_back(ta);
-/// q.push_back(tb);
+/// q.extend(unsafe { [Unqueued::new(a), Unqueued::new(b)] });
 /// assert_eq!(q.len(), 2);
 ///
 /// // Drained then refilled: where the classic tail-pointer bug lives.
@@ -529,11 +527,7 @@ impl<T: Node> Queue<T> {
     /// #         unsafe { NonNull::new_unchecked(&raw mut (*this.as_ptr()).link) }
     /// #     }
     /// # }
-    /// let waiters: Vec<NonNull<Waiter>> = [7, 9, 7, 7]
-    ///     .map(|key| NonNull::new(Box::into_raw(Box::new(Waiter { key, link: Link::new() }))))
-    ///     .into_iter()
-    ///     .collect::<Option<_>>()
-    ///     .ok_or("null box")?;
+    /// let waiters: Vec<_> = [7, 9, 7, 7].map(|key| NonNull::new(Box::into_raw(Box::new(Waiter { key, link: Link::new() })))).into_iter().collect::<Option<_>>().ok_or("null box")?;
     /// // SAFETY: live boxed nodes on no queue, minted from their owning pointers, freed below.
     /// let mut bucket: Queue<Waiter> = waiters.iter().map(|&w| unsafe { Unqueued::new(w) }).collect();
     ///
@@ -546,10 +540,8 @@ impl<T: Node> Queue<T> {
     /// assert!(woken.is_empty());
     /// assert!(bucket.pop_front().is_some_and(|t| t == waiters[1]));
     /// assert!(bucket.pop_front().is_some_and(|t| t == waiters[3]));
-    /// for w in waiters {
-    ///     // SAFETY: each came from `Box::into_raw`, and both queues are empty.
-    ///     unsafe { drop(Box::from_raw(w.as_ptr())) };
-    /// }
+    /// // SAFETY: all four came from `Box::into_raw`, and both queues are empty.
+    /// waiters.iter().for_each(|w| unsafe { drop(Box::from_raw(w.as_ptr())) });
     /// # Ok::<(), &str>(())
     /// ```
     pub fn extract_if(&mut self, mut filter: impl FnMut(NonNull<T>) -> bool) -> Queue<T> {
@@ -647,7 +639,9 @@ impl<T: Node> Queue<T> {
 /// and printing one shows that place and the count, reading no node.
 pub struct Iter<'a, T> {
     next: Option<NonNull<T>>,
-    /// How many nodes the walk has yet to yield.
+    /// How many nodes the walk has yet to yield (`len`, the standard library's
+    /// `ExactSizeIterator::len`).
+    #[doc(alias = "length")]
     len: usize,
     queue: core::marker::PhantomData<&'a Queue<T>>,
 }

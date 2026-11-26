@@ -535,14 +535,21 @@ impl<T: Node> Queue<T> {
     pub fn iter(&self) -> Iter<'_, T> {
         Iter {
             next: self.head,
+            len: self.len,
             queue: core::marker::PhantomData,
         }
     }
 }
 
 /// The walk [`Queue::iter`] returns: each queued node's pointer, oldest first.
+///
+/// It knows how many nodes it has left, from the queue's count, so it is an
+/// [`ExactSizeIterator`]. A clone walks the rest of the queue again from where this walk stands,
+/// and printing one shows that place and the count, reading no node.
 pub struct Iter<'a, T> {
     next: Option<NonNull<T>>,
+    /// How many nodes the walk has yet to yield.
+    len: usize,
     queue: core::marker::PhantomData<&'a Queue<T>>,
 }
 
@@ -555,11 +562,41 @@ impl<T: Node> Iterator for Iter<'_, T> {
         // (rule 2), and the borrow of the queue this walk holds means no push or pop links or
         // unlinks one while it runs; the caller writes no link outside the queue (rule 3).
         self.next = unsafe { read_link(node) };
+        // Wrapping: `next` was `Some`, so at least one node was left and `len >= 1`, as in
+        // `pop_front`.
+        self.len = self.len.wrapping_sub(1);
         Some(node)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.len, Some(self.len))
     }
 }
 
+impl<T: Node> ExactSizeIterator for Iter<'_, T> {}
+
 impl<T: Node> core::iter::FusedIterator for Iter<'_, T> {}
+
+impl<T> Clone for Iter<'_, T> {
+    fn clone(&self) -> Self {
+        Self {
+            next: self.next,
+            len: self.len,
+            queue: core::marker::PhantomData,
+        }
+    }
+}
+
+impl<T> core::fmt::Debug for Iter<'_, T> {
+    /// Prints the next node's pointer and how many are left, and walks nothing, as `Queue`'s
+    /// `Debug` does.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Iter")
+            .field("next", &self.next)
+            .field("len", &self.len)
+            .finish()
+    }
+}
 
 impl<T> core::fmt::Debug for Queue<T> {
     /// Prints the two end pointers and the count, and walks nothing: a walk would read nodes,
@@ -973,6 +1010,35 @@ mod tests {
             .map(|t| tag(&t))
             .collect();
         assert_eq!(tags, vec![2, 3, 1]);
+    }
+
+    /// A walk knows how many nodes it has left at every step, a clone walks the rest again from
+    /// the same place, and a walk prints its place and count.
+    #[test]
+    fn a_walk_counts_down_clones_and_prints() {
+        let (mut a, mut b, mut c) = (node(1), node(2), node(3));
+        let mut q: Queue<N> = Queue::new();
+        assert_eq!(q.iter().size_hint(), (0, Some(0)));
+        q.push_back(token(&mut a));
+        q.push_back(token(&mut b));
+        q.push_back(token(&mut c));
+        let mut walk = q.iter();
+        for left in (0..=3).rev() {
+            assert_eq!((walk.len(), walk.size_hint()), (left, (left, Some(left))));
+            walk.next();
+        }
+        let mut walk = q.iter();
+        assert_eq!(walk.next(), Some(a.0));
+        let again = walk.clone();
+        assert_eq!(walk.collect::<Vec<_>>(), vec![b.0, c.0]);
+        assert_eq!(again.len(), 2);
+        assert_eq!(again.collect::<Vec<_>>(), vec![b.0, c.0]);
+        let walk = q.iter();
+        assert_eq!(
+            format!("{walk:?}"),
+            format!("Iter {{ next: Some({:?}), len: 3 }}", a.0)
+        );
+        assert_eq!(drain(&mut q), vec![1, 2, 3]);
     }
 
     /// A popped node leaves with a clean link: it does not secretly point back into the queue.

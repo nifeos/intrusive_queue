@@ -616,6 +616,34 @@ impl<T> Default for Queue<T> {
     }
 }
 
+impl<T: Node> Extend<Unqueued<T>> for Queue<T> {
+    /// Push each token in turn, as [`push_back`](Queue::push_back) does.
+    fn extend<I: IntoIterator<Item = Unqueued<T>>>(&mut self, tokens: I) {
+        for token in tokens {
+            self.push_back(token);
+        }
+    }
+}
+
+impl<T: Node> FromIterator<Unqueued<T>> for Queue<T> {
+    /// A queue of the tokens' nodes, in the order the iterator yields them.
+    fn from_iter<I: IntoIterator<Item = Unqueued<T>>>(tokens: I) -> Self {
+        let mut queue = Self::new();
+        queue.extend(tokens);
+        queue
+    }
+}
+
+impl<'a, T: Node> IntoIterator for &'a Queue<T> {
+    type Item = NonNull<T>;
+    type IntoIter = Iter<'a, T>;
+
+    /// The same walk as [`Queue::iter`].
+    fn into_iter(self) -> Iter<'a, T> {
+        self.iter()
+    }
+}
+
 /// The one test node the host tests and the proof harnesses share.
 #[cfg(any(test, kani))]
 mod test_support {
@@ -1039,6 +1067,25 @@ mod tests {
             format!("Iter {{ next: Some({:?}), len: 3 }}", a.0)
         );
         assert_eq!(drain(&mut q), vec![1, 2, 3]);
+    }
+
+    /// A queue collects from tokens in order, extends with more behind them, and a `for` loop
+    /// over a borrowed queue walks it as `iter` does.
+    #[test]
+    fn a_queue_collects_extends_and_loops() {
+        let mut nodes: Vec<Owned> = (0..4).map(node).collect();
+        let mut tokens: Vec<Unqueued<N>> = nodes.iter_mut().map(token).collect();
+        let rest = tokens.split_off(2);
+        let mut q: Queue<N> = tokens.into_iter().collect();
+        assert_eq!(q.len(), 2);
+        q.extend(rest);
+        assert_eq!(q.len(), 4);
+        let mut walked = Vec::new();
+        for pointer in &q {
+            walked.push(pointer);
+        }
+        assert_eq!(walked, nodes.iter().map(|n| n.0).collect::<Vec<_>>());
+        assert_eq!(drain(&mut q), vec![0, 1, 2, 3]);
     }
 
     /// A popped node leaves with a clean link: it does not secretly point back into the queue.
